@@ -1,0 +1,15 @@
+[package]
+name = "yurei-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Server logic for Yurei - routing, client management, storage"
+
+[dependencies]
+yurei-core.workspace = true
+yurei-relay.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+iroh.workspace = true

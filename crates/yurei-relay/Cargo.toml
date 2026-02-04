@@ -1,0 +1,16 @@
+[package]
+name = "yurei-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Mux/demux and Iroh transport layer for Yurei"
+
+[dependencies]
+yurei-core.workspace = true
+iroh.workspace = true
+bytes.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+rand.workspace = true

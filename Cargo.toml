@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/yurei-core",
+    "crates/yurei-capture",
+    "crates/yurei-relay",
+    "crates/yurei-server",
+    "apps/yurei-camera",
+    "apps/yurei-server-bin",
+    "apps/yurei-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/anthropics/yurei"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Iroh P2P - using git main for latest compatible dependencies
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+
+# Pin digest to rc version compatible with curve25519-dalek pre-release
+digest = "0.11.0-rc.9"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+bytes = { version = "1", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Random
+rand = "0.9"
+
+# Internal crates
+yurei-core = { path = "crates/yurei-core" }
+yurei-capture = { path = "crates/yurei-capture" }
+yurei-relay = { path = "crates/yurei-relay" }
+yurei-server = { path = "crates/yurei-server" }
+

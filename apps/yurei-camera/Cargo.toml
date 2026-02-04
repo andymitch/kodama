@@ -1,0 +1,21 @@
+[package]
+name = "yurei-camera"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Camera binary for Yurei - runs on Pi Zero 2W"
+
+[features]
+default = []
+test-source = ["yurei-capture/test-source"]
+
+[dependencies]
+yurei-core.workspace = true
+yurei-capture.workspace = true
+yurei-relay.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+iroh.workspace = true
