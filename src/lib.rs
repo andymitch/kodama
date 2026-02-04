@@ -1,10 +1,19 @@
 //! Yurei - Privacy-focused P2P security camera system
 //!
 //! This crate provides everything needed to build a Yurei camera system:
-//! - Frame types and protocol definitions
-//! - Video capture (with optional test source)
-//! - Iroh P2P transport and frame streaming
-//! - Server routing for multi-client distribution
+//! - Core types: frames, channels, identity
+//! - Capture: video, audio, telemetry from cameras
+//! - Relay: Iroh P2P transport and frame muxing
+//! - Server: routing frames to clients and storage
+//! - Storage: local and cloud persistence
+//!
+//! # Architecture
+//!
+//! Yurei is built on three core modules:
+//!
+//! 1. **Camera Module** - Captures video, audio, and telemetry
+//! 2. **Relay Module** - Muxes channels, handles Iroh transport
+//! 3. **Server Module** - Routes streams to clients and storage
 //!
 //! # Example - Camera
 //!
@@ -34,36 +43,43 @@
 //! }
 //! ```
 
-// Core types
-mod frame;
-mod protocol;
+// Core types and protocol
+pub mod core;
 
-// Video capture
+// Sensor capture (includes H.264 parsing)
 pub mod capture;
-pub mod h264;
 
-// P2P transport
-mod transport;
-mod wire;
-mod stream;
-mod buffer;
-mod relay;
+// P2P transport and muxing
+pub mod relay;
 
-// Server
-mod router;
+// Server routing and management
+pub mod server;
 
-// Re-exports
-pub use frame::{Channel, Frame, FrameFlags, SourceId};
-pub use protocol::*;
+// Storage backends
+pub mod storage;
 
+// ============================================================================
+// Re-exports for convenience
+// ============================================================================
+
+// Core types
+pub use core::{Channel, Frame, FrameFlags, SourceId};
+pub use core::{Identity, KeyPair};
+pub use core::{ALPN, DEFAULT_CAMERA_PORT, DEFAULT_SERVER_PORT, FRAME_HEADER_SIZE, MAX_FRAME_PAYLOAD_SIZE};
+
+// Capture
 pub use capture::{VideoCapture, VideoCaptureConfig};
 #[cfg(feature = "test-source")]
 pub use capture::{start_test_source, TestSourceConfig};
 
+// Relay
 pub use relay::{Relay, RelayConnection};
-pub use stream::{FrameReceiver, FrameSender, FrameStream};
-pub use buffer::{BackpressureSender, BufferStats, FrameBuffer};
-pub use wire::{frame_from_bytes, frame_to_bytes, read_frame, write_frame};
-pub use transport::YureiEndpoint;
+pub use relay::{YureiEndpoint, FrameSender, FrameReceiver, FrameStream};
+pub use relay::{FrameBuffer, BackpressureSender, BufferStats};
 
-pub use router::{PeerRole, Router, RouterHandle, RouterStats};
+// Server
+pub use server::{Router, RouterHandle, RouterStats, PeerRole};
+pub use server::{ClientManager, StorageManager};
+
+// Storage
+pub use storage::{StorageBackend, LocalStorage, CloudStorage};

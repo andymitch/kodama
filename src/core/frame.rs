@@ -42,7 +42,7 @@ impl std::fmt::Display for SourceId {
 /// Channel types within a source.
 ///
 /// Each camera outputs multiple channels that are muxed by the relay layer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Channel {
     /// H.264 video frames

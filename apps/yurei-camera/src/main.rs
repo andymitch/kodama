@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
-use yurei::{h264, Frame, Relay, SourceId, VideoCaptureConfig};
+use yurei::{capture::h264, Frame, Relay, SourceId, VideoCaptureConfig};
 
 /// Camera configuration from environment/args
 struct Config {

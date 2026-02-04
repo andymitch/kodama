@@ -6,7 +6,7 @@ use iroh::{PublicKey, SecretKey};
 use std::path::Path;
 use tracing::info;
 
-use crate::ALPN;
+use crate::core::ALPN;
 
 /// Wrapper around iroh Endpoint with Yurei-specific configuration
 pub struct YureiEndpoint {

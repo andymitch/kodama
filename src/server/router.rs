@@ -7,9 +7,8 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::frame::Frame;
-use crate::relay::RelayConnection;
-use crate::stream::FrameReceiver;
+use crate::core::Frame;
+use crate::relay::{RelayConnection, FrameReceiver};
 
 /// Role of a connected peer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

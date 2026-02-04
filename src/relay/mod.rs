@@ -1,14 +1,27 @@
-//! High-level relay API for sending/receiving frames over Iroh
+//! Relay module for Iroh transport and frame muxing/demuxing
+//!
+//! The relay module handles:
+//! - Iroh P2P transport (endpoints, connections)
+//! - Frame multiplexing from multiple sources
+//! - Frame demultiplexing for routing
+//!
+//! A relay can be embedded in a camera (typical), run as a standalone
+//! gateway, or embedded in a server.
+
+pub mod transport;
+pub mod mux;
 
 use anyhow::Result;
 use iroh::endpoint::Connection;
 use iroh::PublicKey;
 use std::path::Path;
 
-use crate::frame::Frame;
-use crate::stream::{FrameReceiver, FrameSender, FrameStream};
-use crate::transport::YureiEndpoint;
-use crate::wire::{read_frame, write_frame};
+use crate::core::Frame;
+use mux::frame::{read_frame, write_frame};
+
+// Re-export key types
+pub use transport::{YureiEndpoint, FrameSender, FrameReceiver, FrameStream};
+pub use mux::{FrameBuffer, BackpressureSender, BufferStats};
 
 /// High-level relay interface for sending/receiving frames over Iroh
 pub struct Relay {

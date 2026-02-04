@@ -16,7 +16,7 @@ use anyhow::Result;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::{Channel, Frame, FrameFlags, SourceId, FRAME_HEADER_SIZE, MAX_FRAME_PAYLOAD_SIZE};
+use crate::core::{Channel, Frame, FrameFlags, SourceId, FRAME_HEADER_SIZE, MAX_FRAME_PAYLOAD_SIZE};
 
 /// Serialize a frame to bytes (header + payload)
 pub fn frame_to_bytes(frame: &Frame) -> Bytes {

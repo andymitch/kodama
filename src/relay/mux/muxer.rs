@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-use crate::frame::Frame;
+use crate::core::Frame;
 
 /// Statistics about frame dropping
 #[derive(Debug, Clone, Default)]
@@ -258,7 +258,7 @@ impl BackpressureSender {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use crate::{Channel, FrameFlags, SourceId};
+    use crate::core::{Channel, FrameFlags, SourceId};
 
     fn make_frame(keyframe: bool) -> Frame {
         Frame {
