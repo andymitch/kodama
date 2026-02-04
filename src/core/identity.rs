@@ -1,4 +1,4 @@
-//! Identity and key management for Yurei
+//! Identity and key management for Kodama
 //!
 //! Handles Ed25519 key generation, persistence, and NodeId derivation.
 
@@ -7,7 +7,7 @@ use iroh::{PublicKey, SecretKey};
 use std::path::Path;
 use tracing::info;
 
-/// A keypair for Yurei identity
+/// A keypair for Kodama identity
 #[derive(Clone)]
 pub struct KeyPair {
     secret: SecretKey,

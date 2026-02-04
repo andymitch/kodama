@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Yurei development setup script
+# Kodama development setup script
 # Handles crypto dependency pinning required for iroh compatibility
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +9,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
-echo "=== Yurei Development Setup ==="
+echo "=== Kodama Development Setup ==="
 echo ""
 
 # Check for Rust
@@ -43,8 +43,8 @@ echo ""
 echo "Next steps:"
 echo "  cargo build          # Build all crates"
 echo "  cargo test           # Run tests"
-echo "  cargo run -p yurei-server-bin  # Run server"
+echo "  cargo run -p kodama-server  # Run server"
 echo ""
 echo "For development without camera hardware:"
-echo "  cargo test -p yurei-capture --features test-source"
+echo "  cargo run -p kodama-camera --features test-source"
 echo ""

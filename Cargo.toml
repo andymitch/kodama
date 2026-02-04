@@ -1,9 +1,9 @@
 [package]
-name = "yurei"
+name = "kodama"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/anthropics/yurei"
+repository = "https://github.com/andymitch/kodama"
 description = "Privacy-focused P2P security camera system"
 
 [features]
@@ -27,19 +27,19 @@ tempfile = "3"
 
 [workspace]
 members = [
-    "apps/yurei-camera",
-    "apps/yurei-server-bin",
-    "apps/yurei-desktop",
+    "apps/kodama-camera",
+    "apps/kodama-server",
+    "apps/kodama-desktop",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/anthropics/yurei"
+repository = "https://github.com/andymitch/kodama"
 
 [workspace.dependencies]
-yurei = { path = "." }
+kodama = { path = "." }
 tokio = { version = "1", features = ["full"] }
 iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
 serde = { version = "1", features = ["derive"] }

@@ -1,17 +1,17 @@
 [package]
-name = "yurei-camera"
+name = "kodama-camera"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Camera binary for Yurei - runs on Pi Zero 2W"
+description = "Camera binary for Kodama - runs on Pi Zero 2W"
 
 [features]
 default = []
-test-source = ["yurei/test-source"]
+test-source = ["kodama/test-source"]
 
 [dependencies]
-yurei.workspace = true
+kodama.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

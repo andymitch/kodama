@@ -1,4 +1,4 @@
-//! Core types and protocol definitions for Yurei
+//! Core types and protocol definitions for Kodama
 //!
 //! This module contains foundational types used throughout the system:
 //! - Frame types for video, audio, and telemetry

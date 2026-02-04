@@ -48,10 +48,10 @@ impl Default for CloudStorageConfig {
     fn default() -> Self {
         Self {
             endpoint_url: None,
-            bucket: String::from("yurei-recordings"),
+            bucket: String::from("kodama-recordings"),
             region: String::from("us-east-1"),
             prefix: String::new(),
-            cache_dir: PathBuf::from("/tmp/yurei-cache"),
+            cache_dir: PathBuf::from("/tmp/kodama-cache"),
             segment_duration_us: 60 * 1_000_000, // 1-minute segments
             max_cache_bytes: 1024 * 1024 * 1024, // 1 GB cache
         }

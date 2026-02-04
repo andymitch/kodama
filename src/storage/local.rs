@@ -30,7 +30,7 @@ pub struct LocalStorageConfig {
 impl Default for LocalStorageConfig {
     fn default() -> Self {
         Self {
-            root_path: PathBuf::from("/var/lib/yurei/recordings"),
+            root_path: PathBuf::from("/var/lib/kodama/recordings"),
             max_size_bytes: 10 * 1024 * 1024 * 1024, // 10 GB
             segment_duration_us: 60 * 1_000_000, // 1-minute segments
         }

@@ -20,12 +20,12 @@ use crate::core::Frame;
 use mux::frame::{read_frame, write_frame};
 
 // Re-export key types
-pub use transport::{YureiEndpoint, FrameSender, FrameReceiver, FrameStream};
+pub use transport::{KodamaEndpoint, FrameSender, FrameReceiver, FrameStream};
 pub use mux::{FrameBuffer, BackpressureSender, BufferStats};
 
 /// High-level relay interface for sending/receiving frames over Iroh
 pub struct Relay {
-    endpoint: YureiEndpoint,
+    endpoint: KodamaEndpoint,
 }
 
 impl Relay {
@@ -34,7 +34,7 @@ impl Relay {
     /// If `key_path` is provided, the secret key is loaded from or saved to that path.
     /// If `key_path` is None, an ephemeral key is generated.
     pub async fn new(key_path: Option<&Path>) -> Result<Self> {
-        let endpoint = YureiEndpoint::new(key_path).await?;
+        let endpoint = KodamaEndpoint::new(key_path).await?;
         Ok(Self { endpoint })
     }
 
@@ -66,8 +66,8 @@ impl Relay {
         self.endpoint.close().await;
     }
 
-    /// Get the underlying YureiEndpoint for advanced usage
-    pub fn endpoint(&self) -> &YureiEndpoint {
+    /// Get the underlying KodamaEndpoint for advanced usage
+    pub fn endpoint(&self) -> &KodamaEndpoint {
         &self.endpoint
     }
 }

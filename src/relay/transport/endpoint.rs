@@ -1,4 +1,4 @@
-//! Iroh endpoint wrapper for Yurei
+//! Iroh endpoint wrapper for Kodama
 
 use anyhow::Result;
 use iroh::endpoint::{Connection, Endpoint, RelayMode};
@@ -8,12 +8,12 @@ use tracing::info;
 
 use crate::core::ALPN;
 
-/// Wrapper around iroh Endpoint with Yurei-specific configuration
-pub struct YureiEndpoint {
+/// Wrapper around iroh Endpoint with Kodama-specific configuration
+pub struct KodamaEndpoint {
     endpoint: Endpoint,
 }
 
-impl YureiEndpoint {
+impl KodamaEndpoint {
     /// Create a new endpoint, loading or generating a secret key
     ///
     /// If `key_path` is provided and exists, loads the key from disk.

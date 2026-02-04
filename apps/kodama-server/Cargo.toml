@@ -1,13 +1,13 @@
 [package]
-name = "yurei-server-bin"
+name = "kodama-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Headless server binary for Yurei"
+description = "Headless server binary for Kodama"
 
 [dependencies]
-yurei.workspace = true
+kodama.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
