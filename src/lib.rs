@@ -1,6 +1,6 @@
-//! Yurei - Privacy-focused P2P security camera system
+//! Kodama - Privacy-focused P2P security camera system
 //!
-//! This crate provides everything needed to build a Yurei camera system:
+//! This crate provides everything needed to build a Kodama camera system:
 //! - Core types: frames, channels, identity
 //! - Capture: video, audio, telemetry from cameras
 //! - Relay: Iroh P2P transport and frame muxing
@@ -9,7 +9,7 @@
 //!
 //! # Architecture
 //!
-//! Yurei is built on three core modules:
+//! Kodama is built on three core modules:
 //!
 //! 1. **Camera Module** - Captures video, audio, and telemetry
 //! 2. **Relay Module** - Muxes channels, handles Iroh transport
@@ -18,7 +18,7 @@
 //! # Example - Camera
 //!
 //! ```ignore
-//! use yurei::{Relay, Frame, SourceId, h264};
+//! use kodama::{Relay, Frame, SourceId, h264};
 //!
 //! let relay = Relay::new(Some(Path::new("./camera.key"))).await?;
 //! let conn = relay.connect(server_key).await?;
@@ -33,7 +33,7 @@
 //! # Example - Server
 //!
 //! ```ignore
-//! use yurei::{Relay, Router};
+//! use kodama::{Relay, Router};
 //!
 //! let relay = Relay::new(Some(Path::new("./server.key"))).await?;
 //! let router = Router::new(64);
@@ -74,7 +74,7 @@ pub use capture::{start_test_source, TestSourceConfig};
 
 // Relay
 pub use relay::{Relay, RelayConnection};
-pub use relay::{YureiEndpoint, FrameSender, FrameReceiver, FrameStream};
+pub use relay::{KodamaEndpoint, FrameSender, FrameReceiver, FrameStream};
 pub use relay::{FrameBuffer, BackpressureSender, BufferStats};
 
 // Server

@@ -5,5 +5,5 @@
 mod endpoint;
 mod connection;
 
-pub use endpoint::YureiEndpoint;
+pub use endpoint::KodamaEndpoint;
 pub use connection::{FrameSender, FrameReceiver, FrameStream};

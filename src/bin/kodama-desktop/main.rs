@@ -1,4 +1,4 @@
-//! Yurei Desktop Client
+//! Kodama Desktop Client
 //!
 //! Connects to server and receives video frames.
 //!
@@ -6,13 +6,13 @@
 //!
 //! ```bash
 //! # Set the server's public key
-//! export YUREI_SERVER_KEY=<base32-public-key>
+//! export KODAMA_SERVER_KEY=<base32-public-key>
 //!
 //! # Run the client
-//! yurei-desktop
+//! kodama-desktop
 //!
 //! # With verbose logging
-//! RUST_LOG=yurei=debug yurei-desktop
+//! RUST_LOG=kodama=debug kodama-desktop
 //! ```
 //!
 //! The client connects to the specified server and starts receiving frames.
@@ -23,7 +23,7 @@ use iroh::PublicKey;
 use std::str::FromStr;
 use tokio::time::{Duration, Instant};
 use tracing::{error, info};
-use yurei::Relay;
+use kodama::Relay;
 
 /// Client configuration from environment
 struct Config {
@@ -33,11 +33,11 @@ struct Config {
 
 impl Config {
     fn from_env() -> Result<Self> {
-        let server_key_str = std::env::var("YUREI_SERVER_KEY")
-            .context("YUREI_SERVER_KEY environment variable not set")?;
+        let server_key_str = std::env::var("KODAMA_SERVER_KEY")
+            .context("KODAMA_SERVER_KEY environment variable not set")?;
 
         let server_key = PublicKey::from_str(&server_key_str)
-            .context("Invalid YUREI_SERVER_KEY format")?;
+            .context("Invalid KODAMA_SERVER_KEY format")?;
 
         Ok(Self { server_key })
     }
@@ -49,13 +49,13 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("yurei=info".parse().unwrap()),
+                .add_directive("kodama=info".parse().unwrap()),
         )
         .init();
 
     let config = Config::from_env()?;
 
-    info!("Yurei Desktop Client starting");
+    info!("Kodama Desktop Client starting");
     info!("Connecting to server: {}", config.server_key);
 
     // Initialize relay endpoint (ephemeral key for client)

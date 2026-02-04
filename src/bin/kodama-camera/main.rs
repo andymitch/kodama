@@ -1,4 +1,4 @@
-//! Yurei Camera Binary
+//! Kodama Camera Binary
 //!
 //! Captures video from Pi camera and streams to server via Iroh P2P.
 //!
@@ -6,13 +6,13 @@
 //!
 //! ```bash
 //! # Set the server's public key
-//! export YUREI_SERVER_KEY=<base32-public-key>
+//! export KODAMA_SERVER_KEY=<base32-public-key>
 //!
 //! # Run with real camera (Pi)
-//! yurei-camera
+//! kodama-camera
 //!
 //! # Run with test source (development)
-//! yurei-camera --test-source
+//! kodama-camera --test-source
 //! ```
 
 use anyhow::{Context, Result};
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
-use yurei::{capture::h264, Frame, Relay, SourceId, VideoCaptureConfig};
+use kodama::{capture::h264, Frame, Relay, SourceId, VideoCaptureConfig};
 
 /// Camera configuration from environment/args
 struct Config {
@@ -37,30 +37,30 @@ struct Config {
 
 impl Config {
     fn from_env() -> Result<Self> {
-        let server_key_str = std::env::var("YUREI_SERVER_KEY")
-            .context("YUREI_SERVER_KEY environment variable not set")?;
+        let server_key_str = std::env::var("KODAMA_SERVER_KEY")
+            .context("KODAMA_SERVER_KEY environment variable not set")?;
 
         let server_key = PublicKey::from_str(&server_key_str)
-            .context("Invalid YUREI_SERVER_KEY format")?;
+            .context("Invalid KODAMA_SERVER_KEY format")?;
 
-        let key_path = std::env::var("YUREI_KEY_PATH")
+        let key_path = std::env::var("KODAMA_KEY_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/var/lib/yurei/camera.key"));
+            .unwrap_or_else(|_| PathBuf::from("/var/lib/kodama/camera.key"));
 
         let test_source = std::env::args().any(|arg| arg == "--test-source");
 
         // Video config from env or defaults
-        let width: u32 = std::env::var("YUREI_WIDTH")
+        let width: u32 = std::env::var("KODAMA_WIDTH")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1280);
 
-        let height: u32 = std::env::var("YUREI_HEIGHT")
+        let height: u32 = std::env::var("KODAMA_HEIGHT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(720);
 
-        let fps: u32 = std::env::var("YUREI_FPS")
+        let fps: u32 = std::env::var("KODAMA_FPS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
@@ -85,14 +85,14 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("yurei=info".parse().unwrap()),
+                .add_directive("kodama=info".parse().unwrap()),
         )
         .init();
 
     // Load configuration
     let config = Config::from_env()?;
 
-    info!("Yurei Camera starting");
+    info!("Kodama Camera starting");
     info!("  Video: {}x{} @ {}fps", config.video.width, config.video.height, config.video.fps);
     info!("  Test source: {}", config.test_source);
 
@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "test-source")]
         {
             info!("Starting test video source");
-            yurei::start_test_source(yurei::TestSourceConfig {
+            kodama::start_test_source(kodama::TestSourceConfig {
                 fps: config.video.fps,
                 frame_size: 15000, // ~15KB simulated frames
                 keyframe_interval: config.video.fps, // Keyframe every second
@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
         }
     } else {
         info!("Starting video capture");
-        let (_capture, rx) = yurei::VideoCapture::start(config.video.clone())
+        let (_capture, rx) = kodama::VideoCapture::start(config.video.clone())
             .context("Failed to start video capture")?;
         rx
     };

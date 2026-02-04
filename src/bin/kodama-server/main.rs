@@ -1,4 +1,4 @@
-//! Yurei Server Binary
+//! Kodama Server Binary
 //!
 //! Accepts camera connections and routes frames to clients.
 //!
@@ -6,24 +6,24 @@
 //!
 //! ```bash
 //! # Run the server
-//! yurei-server-bin
+//! kodama-server
 //!
 //! # With custom key path
-//! YUREI_KEY_PATH=./my-server.key yurei-server-bin
+//! KODAMA_KEY_PATH=./my-server.key kodama-server
 //!
 //! # With verbose logging
-//! RUST_LOG=yurei=debug yurei-server-bin
+//! RUST_LOG=kodama=debug kodama-server
 //! ```
 //!
 //! The server will print its PublicKey on startup. Share this key with:
-//! - Cameras: set YUREI_SERVER_KEY to connect
+//! - Cameras: set KODAMA_SERVER_KEY to connect
 //! - Clients: use to connect from the desktop app
 
 use anyhow::Result;
 use std::path::PathBuf;
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
-use yurei::{Relay, Router};
+use kodama::{Relay, Router};
 
 /// Server configuration from environment
 struct Config {
@@ -35,11 +35,11 @@ struct Config {
 
 impl Config {
     fn from_env() -> Self {
-        let key_path = std::env::var("YUREI_KEY_PATH")
+        let key_path = std::env::var("KODAMA_KEY_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("./server.key"));
 
-        let buffer_capacity: usize = std::env::var("YUREI_BUFFER_SIZE")
+        let buffer_capacity: usize = std::env::var("KODAMA_BUFFER_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(64);
@@ -57,13 +57,13 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("yurei=info".parse().unwrap()),
+                .add_directive("kodama=info".parse().unwrap()),
         )
         .init();
 
     let config = Config::from_env();
 
-    info!("Yurei Server starting");
+    info!("Kodama Server starting");
     info!("  Key path: {:?}", config.key_path);
     info!("  Buffer capacity: {}", config.buffer_capacity);
 
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
     let relay = Relay::new(Some(&config.key_path)).await?;
     info!("Server PublicKey: {}", relay.public_key());
     info!("");
-    info!("Share this key with cameras (YUREI_SERVER_KEY)");
+    info!("Share this key with cameras (KODAMA_SERVER_KEY)");
     info!("and clients to connect.");
     info!("");
 

@@ -321,9 +321,9 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crypto-common"
-version = "0.2.0-rc.15"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8441110cea75afde0b89a8d796e2bc67b23432f5a9566cb15d9d365d91a2b0"
+checksum = "211f05e03c7d03754740fd9e585de910a095d6b99f8bcfffdef8319fa02a8331"
 dependencies = [
  "hybrid-array",
 ]
@@ -480,9 +480,9 @@ checksum = "ab03c107fafeb3ee9f5925686dbb7a73bc76e3932abb0d2b365cb64b169cf04c"
 
 [[package]]
 name = "digest"
-version = "0.11.0-rc.9"
+version = "0.11.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bff8de092798697546237a3a701e4174fe021579faec9b854379af9bf1e31962"
+checksum = "02b42f1d9edf5207c137646b568a0168ca0ec25b7f9eaf7f9961da51a3d91cea"
 dependencies = [
  "block-buffer",
  "crypto-common",
@@ -1493,6 +1493,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kodama"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "iroh",
+ "rand",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1664,9 +1682,9 @@ dependencies = [
 
 [[package]]
 name = "n0-watcher"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba717c22ceec021ace0ff7674bf8fd60c9394605740a8201678fc1cb3a7398f6"
+checksum = "38795f7932e6e9d1c6e989270ef5b3ff24ebb910e2c9d4bed2d28d8bae3007dc"
 dependencies = [
  "derive_more",
  "n0-error",
@@ -2603,9 +2621,9 @@ checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "sha2"
-version = "0.11.0-rc.4"
+version = "0.11.0-rc.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7535f94fa3339fe9e5e9be6260a909e62af97f6e14b32345ccf79b92b8b81233"
+checksum = "7c5f3b1e2dc8aad28310d8410bd4d7e180eca65fca176c52ab00d364475d0024"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -3853,59 +3871,6 @@ dependencies = [
  "quote",
  "syn",
  "synstructure",
-]
-
-[[package]]
-name = "yurei"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "iroh",
- "rand",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "yurei-camera"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "yurei",
-]
-
-[[package]]
-name = "yurei-desktop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "yurei",
-]
-
-[[package]]
-name = "yurei-server-bin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "yurei",
 ]
 
 [[package]]

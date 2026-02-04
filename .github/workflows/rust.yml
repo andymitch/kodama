@@ -16,6 +16,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Pin crypto dependencies
+      run: |
+        cargo update -p sha2 --precise 0.11.0-rc.4
+        cargo update -p digest --precise 0.11.0-rc.9
     - name: Build
       run: cargo build --verbose
     - name: Run tests

@@ -1,9 +1,9 @@
 [package]
-name = "yurei"
+name = "kodama"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/anthropics/yurei"
+repository = "https://github.com/andymitch/kodama"
 description = "Privacy-focused P2P security camera system"
 
 [features]
@@ -18,6 +18,7 @@ bytes = { version = "1", features = ["serde"] }
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.9"
 async-trait = "0.1"
 serde_json = "1"
@@ -25,27 +26,18 @@ serde_json = "1"
 [dev-dependencies]
 tempfile = "3"
 
-[workspace]
-members = [
-    "apps/yurei-camera",
-    "apps/yurei-server-bin",
-    "apps/yurei-desktop",
-]
+[[bin]]
+name = "kodama-camera"
+path = "src/bin/kodama-camera/main.rs"
 
-[workspace.package]
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/anthropics/yurei"
+[[bin]]
+name = "kodama-desktop"
+path = "src/bin/kodama-desktop/main.rs"
 
-[workspace.dependencies]
-yurei = { path = "." }
-tokio = { version = "1", features = ["full"] }
-iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-serde = { version = "1", features = ["derive"] }
-bytes = { version = "1", features = ["serde"] }
-anyhow = "1"
-thiserror = "2"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rand = "0.9"
+[[bin]]
+name = "kodama-relay"
+path = "src/bin/kodama-relay/main.rs"
+
+[[bin]]
+name = "kodama-server"
+path = "src/bin/kodama-server/main.rs"

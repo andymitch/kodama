@@ -1,9 +1,9 @@
-//! Protocol constants for Yurei
+//! Protocol constants for Kodama
 
-/// ALPN protocol identifier for Yurei connections.
+/// ALPN protocol identifier for Kodama connections.
 ///
-/// Used during QUIC handshake to identify Yurei protocol version.
-pub const ALPN: &[u8] = b"yurei/0";
+/// Used during QUIC handshake to identify Kodama protocol version.
+pub const ALPN: &[u8] = b"kodama/0";
 
 /// Default port for camera relay endpoints
 pub const DEFAULT_CAMERA_PORT: u16 = 7878;
