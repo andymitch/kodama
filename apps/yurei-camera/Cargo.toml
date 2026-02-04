@@ -8,12 +8,10 @@ description = "Camera binary for Yurei - runs on Pi Zero 2W"
 
 [features]
 default = []
-test-source = ["yurei-capture/test-source"]
+test-source = ["yurei/test-source"]
 
 [dependencies]
-yurei-core.workspace = true
-yurei-capture.workspace = true
-yurei-relay.workspace = true
+yurei.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

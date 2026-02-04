@@ -4,16 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Desktop client for Yurei (Tauri app)"
+description = "Desktop client for Yurei"
 
 [dependencies]
-yurei-core.workspace = true
-yurei-relay.workspace = true
+yurei.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 iroh.workspace = true
-
-# Tauri dependencies (Phase 1.6b - GUI client)
-# tauri = { version = "2", features = [] }

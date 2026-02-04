@@ -1,10 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/yurei-core",
-    "crates/yurei-capture",
-    "crates/yurei-relay",
-    "crates/yurei-server",
+    "crates/yurei",
     "apps/yurei-camera",
     "apps/yurei-server-bin",
     "apps/yurei-desktop",
@@ -41,9 +38,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Random
 rand = "0.9"
 
-# Internal crates
-yurei-core = { path = "crates/yurei-core" }
-yurei-capture = { path = "crates/yurei-capture" }
-yurei-relay = { path = "crates/yurei-relay" }
-yurei-server = { path = "crates/yurei-server" }
-
+# Internal crate
+yurei = { path = "crates/yurei" }

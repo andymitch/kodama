@@ -3824,6 +3824,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yurei"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "iroh",
+ "rand",
+ "serde",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "yurei-camera"
 version = "0.1.0"
 dependencies = [
@@ -3832,28 +3846,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "yurei-capture",
- "yurei-core",
- "yurei-relay",
-]
-
-[[package]]
-name = "yurei-capture"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "tokio",
- "tracing",
- "yurei-core",
-]
-
-[[package]]
-name = "yurei-core"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "serde",
+ "yurei",
 ]
 
 [[package]]
@@ -3865,33 +3858,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "yurei-core",
- "yurei-relay",
-]
-
-[[package]]
-name = "yurei-relay"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "iroh",
- "rand",
- "tokio",
- "tracing",
- "yurei-core",
-]
-
-[[package]]
-name = "yurei-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "tokio",
- "tracing",
- "yurei-core",
- "yurei-relay",
+ "yurei",
 ]
 
 [[package]]
@@ -3903,9 +3870,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "yurei-core",
- "yurei-relay",
- "yurei-server",
+ "yurei",
 ]
 
 [[package]]

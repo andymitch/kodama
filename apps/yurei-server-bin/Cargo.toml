@@ -7,9 +7,7 @@ repository.workspace = true
 description = "Headless server binary for Yurei"
 
 [dependencies]
-yurei-core.workspace = true
-yurei-relay.workspace = true
-yurei-server.workspace = true
+yurei.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

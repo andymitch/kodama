@@ -21,9 +21,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
-use yurei_capture::{h264, VideoCaptureConfig};
-use yurei_core::{Frame, SourceId};
-use yurei_relay::Relay;
+use yurei::{h264, Frame, Relay, SourceId, VideoCaptureConfig};
 
 /// Camera configuration from environment/args
 struct Config {
@@ -119,7 +117,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "test-source")]
         {
             info!("Starting test video source");
-            yurei_capture::start_test_source(yurei_capture::TestSourceConfig {
+            yurei::start_test_source(yurei::TestSourceConfig {
                 fps: config.video.fps,
                 frame_size: 15000, // ~15KB simulated frames
                 keyframe_interval: config.video.fps, // Keyframe every second
@@ -131,7 +129,7 @@ async fn main() -> Result<()> {
         }
     } else {
         info!("Starting video capture");
-        let (_capture, rx) = yurei_capture::VideoCapture::start(config.video.clone())
+        let (_capture, rx) = yurei::VideoCapture::start(config.video.clone())
             .context("Failed to start video capture")?;
         rx
     };

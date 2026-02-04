@@ -8,7 +8,8 @@
 use std::collections::VecDeque;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
-use yurei_core::Frame;
+
+use crate::frame::Frame;
 
 /// Statistics about frame dropping
 #[derive(Debug, Clone, Default)]
@@ -257,12 +258,12 @@ impl BackpressureSender {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use yurei_core::{FrameFlags, SourceId};
+    use crate::{Channel, FrameFlags, SourceId};
 
     fn make_frame(keyframe: bool) -> Frame {
         Frame {
             source: SourceId::new([0; 8]),
-            channel: yurei_core::Channel::Video,
+            channel: Channel::Video,
             flags: if keyframe {
                 FrameFlags::keyframe()
             } else {

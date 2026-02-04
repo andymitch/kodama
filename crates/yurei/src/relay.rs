@@ -1,58 +1,14 @@
-//! yurei-relay: Mux/demux and Iroh transport layer for Yurei
-//!
-//! This crate provides:
-//! - Iroh endpoint management and connection handling
-//! - Frame serialization/deserialization over the wire
-//! - High-level `Relay` API for sending/receiving frames
-//!
-//! # Example - Simple per-frame API
-//!
-//! ```ignore
-//! use yurei_relay::Relay;
-//!
-//! let relay = Relay::new(Some(Path::new("./my.key"))).await?;
-//! let conn = relay.connect(remote_public_key).await?;
-//!
-//! // Simple API: one stream per frame (convenient but has overhead)
-//! conn.send_frame(&frame).await?;
-//! let frame = conn.recv_frame().await?;
-//! ```
-//!
-//! # Example - Persistent stream API (recommended for video)
-//!
-//! ```ignore
-//! use yurei_relay::Relay;
-//!
-//! let relay = Relay::new(None).await?;
-//! let conn = relay.connect(remote_public_key).await?;
-//!
-//! // Open a persistent stream for high-throughput streaming
-//! let sender = conn.open_frame_stream().await?;
-//! for frame in frames {
-//!     sender.send(&frame).await?;
-//! }
-//! sender.finish().await?;
-//!
-//! // On the receiving side:
-//! let receiver = conn.accept_frame_stream().await?;
-//! while let Some(frame) = receiver.recv().await? {
-//!     // Process frame...
-//! }
-//! ```
-
-mod mux;
-mod transport;
+//! High-level relay API for sending/receiving frames over Iroh
 
 use anyhow::Result;
 use iroh::endpoint::Connection;
 use iroh::PublicKey;
 use std::path::Path;
-use yurei_core::Frame;
 
-pub use mux::buffer::{BackpressureSender, BufferStats, FrameBuffer};
-pub use mux::stream::{FrameReceiver, FrameSender, FrameStream};
-pub use mux::wire::{frame_from_bytes, frame_to_bytes, read_frame, write_frame};
-pub use transport::YureiEndpoint;
+use crate::frame::Frame;
+use crate::stream::{FrameReceiver, FrameSender, FrameStream};
+use crate::transport::YureiEndpoint;
+use crate::wire::{read_frame, write_frame};
 
 /// High-level relay interface for sending/receiving frames over Iroh
 pub struct Relay {
@@ -109,7 +65,7 @@ pub struct RelayConnection {
 }
 
 impl RelayConnection {
-    fn new(conn: Connection) -> Self {
+    pub(crate) fn new(conn: Connection) -> Self {
         Self { conn }
     }
 

@@ -7,9 +7,9 @@
 use anyhow::Result;
 use iroh::endpoint::{RecvStream, SendStream};
 use tokio::sync::Mutex;
-use yurei_core::Frame;
 
-use super::wire::{read_frame, write_frame};
+use crate::frame::Frame;
+use crate::wire::{read_frame, write_frame};
 
 /// A sender for streaming frames over a persistent QUIC stream
 pub struct FrameSender {

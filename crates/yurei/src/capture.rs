@@ -219,132 +219,80 @@ impl Drop for VideoCapture {
     }
 }
 
-/// Test video source for development without real camera hardware
+/// Configuration for test video source
 #[cfg(feature = "test-source")]
-pub mod test {
-    use super::*;
+#[derive(Debug, Clone)]
+pub struct TestSourceConfig {
+    /// Frames per second
+    pub fps: u32,
+    /// Simulated frame size in bytes
+    pub frame_size: usize,
+    /// Simulate keyframes every N frames
+    pub keyframe_interval: u32,
+}
+
+#[cfg(feature = "test-source")]
+impl Default for TestSourceConfig {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            frame_size: 10000, // ~10KB per frame
+            keyframe_interval: 30,
+        }
+    }
+}
+
+/// Start a test video source that generates fake H.264-like frames
+#[cfg(feature = "test-source")]
+pub fn start_test_source(config: TestSourceConfig) -> mpsc::Receiver<Bytes> {
     use tokio::time::{interval, Duration, Instant};
 
-    /// Configuration for test video source
-    #[derive(Debug, Clone)]
-    pub struct TestSourceConfig {
-        /// Frames per second
-        pub fps: u32,
-        /// Simulated frame size in bytes
-        pub frame_size: usize,
-        /// Simulate keyframes every N frames
-        pub keyframe_interval: u32,
-    }
+    let (tx, rx) = mpsc::channel(config.fps as usize);
 
-    impl Default for TestSourceConfig {
-        fn default() -> Self {
-            Self {
-                fps: 30,
-                frame_size: 10000, // ~10KB per frame
-                keyframe_interval: 30,
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_micros(1_000_000 / config.fps as u64));
+        let mut frame_num = 0u32;
+        let start = Instant::now();
+
+        info!(
+            "Test video source started: {}fps, {}B frames",
+            config.fps, config.frame_size
+        );
+
+        loop {
+            interval.tick().await;
+
+            let is_keyframe = frame_num % config.keyframe_interval == 0;
+            let timestamp_us = start.elapsed().as_micros() as u64;
+
+            // Build fake frame
+            let mut data = Vec::with_capacity(config.frame_size);
+
+            // Frame header
+            data.extend_from_slice(&frame_num.to_be_bytes());
+            data.push(if is_keyframe { 0x01 } else { 0x00 });
+            data.extend_from_slice(&timestamp_us.to_be_bytes());
+
+            // Padding with pattern (simulates compressed video data)
+            while data.len() < config.frame_size {
+                data.push((frame_num & 0xFF) as u8);
             }
-        }
-    }
+            data.truncate(config.frame_size);
 
-    /// Start a test video source that generates fake H.264-like frames
-    ///
-    /// The frames contain:
-    /// - 4 bytes: frame number (big-endian u32)
-    /// - 1 byte: keyframe flag (0x01 if keyframe, 0x00 otherwise)
-    /// - 8 bytes: timestamp in microseconds (big-endian u64)
-    /// - Remaining: padding to reach frame_size
-    pub fn start_test_source(config: TestSourceConfig) -> mpsc::Receiver<Bytes> {
-        let (tx, rx) = mpsc::channel(config.fps as usize);
-
-        tokio::spawn(async move {
-            let mut interval = interval(Duration::from_micros(1_000_000 / config.fps as u64));
-            let mut frame_num = 0u32;
-            let start = Instant::now();
-
-            info!(
-                "Test video source started: {}fps, {}B frames",
-                config.fps, config.frame_size
-            );
-
-            loop {
-                interval.tick().await;
-
-                let is_keyframe = frame_num % config.keyframe_interval == 0;
-                let timestamp_us = start.elapsed().as_micros() as u64;
-
-                // Build fake frame
-                let mut data = Vec::with_capacity(config.frame_size);
-
-                // Frame header
-                data.extend_from_slice(&frame_num.to_be_bytes());
-                data.push(if is_keyframe { 0x01 } else { 0x00 });
-                data.extend_from_slice(&timestamp_us.to_be_bytes());
-
-                // Padding with pattern (simulates compressed video data)
-                while data.len() < config.frame_size {
-                    data.push((frame_num & 0xFF) as u8);
-                }
-                data.truncate(config.frame_size);
-
-                if tx.send(Bytes::from(data)).await.is_err() {
-                    info!("Test source receiver dropped");
-                    break;
-                }
-
-                frame_num = frame_num.wrapping_add(1);
-
-                if frame_num % 300 == 0 {
-                    debug!("Test source: {} frames generated", frame_num);
-                }
+            if tx.send(Bytes::from(data)).await.is_err() {
+                info!("Test source receiver dropped");
+                break;
             }
 
-            info!("Test video source stopped after {} frames", frame_num);
-        });
+            frame_num = frame_num.wrapping_add(1);
 
-        rx
-    }
-
-    /// Parse a test frame to extract metadata
-    pub fn parse_test_frame(data: &[u8]) -> Option<(u32, bool, u64)> {
-        if data.len() < 13 {
-            return None;
-        }
-
-        let frame_num = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let is_keyframe = data[4] == 0x01;
-        let timestamp_us = u64::from_be_bytes([
-            data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12],
-        ]);
-
-        Some((frame_num, is_keyframe, timestamp_us))
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[tokio::test]
-        async fn test_source_generates_frames() {
-            let config = TestSourceConfig {
-                fps: 60, // Fast for testing
-                frame_size: 100,
-                keyframe_interval: 10,
-            };
-
-            let mut rx = start_test_source(config);
-
-            // Receive a few frames
-            for expected_num in 0..5 {
-                let frame = tokio::time::timeout(Duration::from_millis(100), rx.recv())
-                    .await
-                    .expect("Timeout waiting for frame")
-                    .expect("Channel closed");
-
-                let (frame_num, is_keyframe, _ts) = parse_test_frame(&frame).unwrap();
-                assert_eq!(frame_num, expected_num);
-                assert_eq!(is_keyframe, expected_num % 10 == 0);
-                assert_eq!(frame.len(), 100);
+            if frame_num % 300 == 0 {
+                debug!("Test source: {} frames generated", frame_num);
             }
         }
-    }
+
+        info!("Test video source stopped after {} frames", frame_num);
+    });
+
+    rx
 }

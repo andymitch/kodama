@@ -17,14 +17,13 @@
 //!
 //! The client connects to the specified server and starts receiving frames.
 //! For POC 1, this is a CLI that logs frame statistics.
-//! A full Tauri GUI will be implemented in Phase 1.6b.
 
 use anyhow::{Context, Result};
 use iroh::PublicKey;
 use std::str::FromStr;
 use tokio::time::{Duration, Instant};
 use tracing::{error, info};
-use yurei_relay::Relay;
+use yurei::Relay;
 
 /// Client configuration from environment
 struct Config {

@@ -23,8 +23,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use tokio::time::{interval, Duration};
 use tracing::{error, info, warn};
-use yurei_relay::Relay;
-use yurei_server::Router;
+use yurei::{Relay, Router};
 
 /// Server configuration from environment
 struct Config {
@@ -135,9 +134,7 @@ async fn main() -> Result<()> {
                             match result {
                                 Ok(receiver) => {
                                     info!(peer = %remote, "Detected as camera (opened stream)");
-                                    // We already accepted the stream, need to handle it
-                                    // Re-wrap into a connection handler
-                                    if let Err(e) = handle_camera_with_receiver(&router, conn, receiver, remote).await {
+                                    if let Err(e) = router.handle_camera_with_receiver(remote, receiver).await {
                                         warn!(peer = %remote, error = %e, "Camera handler error");
                                     }
                                 }
@@ -164,14 +161,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Handle a camera connection when we've already accepted the frame receiver
-async fn handle_camera_with_receiver(
-    router: &Router,
-    _conn: yurei_relay::RelayConnection,
-    receiver: yurei_relay::FrameReceiver,
-    remote: iroh::PublicKey,
-) -> Result<()> {
-    router.handle_camera_with_receiver(remote, receiver).await
 }

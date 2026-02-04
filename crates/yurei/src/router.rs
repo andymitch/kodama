@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, info, warn};
-use yurei_core::Frame;
-use yurei_relay::RelayConnection;
+
+use crate::frame::Frame;
+use crate::relay::RelayConnection;
+use crate::stream::FrameReceiver;
 
 /// Role of a connected peer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,16 +133,6 @@ impl Router {
         }
     }
 
-    /// Register a peer (public for server binary use)
-    pub async fn register_peer_pub(&self, key: PublicKey, role: PeerRole) {
-        self.register_peer(key, role).await;
-    }
-
-    /// Unregister a peer (public for server binary use)
-    pub async fn unregister_peer_pub(&self, key: PublicKey) {
-        self.unregister_peer(key).await;
-    }
-
     /// Broadcast a frame to all subscribers
     pub async fn broadcast_frame(&self, frame: Frame) {
         // Update stats
@@ -170,7 +162,7 @@ impl Router {
     pub async fn handle_camera_with_receiver(
         &self,
         remote: PublicKey,
-        receiver: yurei_relay::FrameReceiver,
+        receiver: FrameReceiver,
     ) -> Result<()> {
         self.register_peer(remote, PeerRole::Camera).await;
         info!(camera = %remote, "Camera stream opened");
@@ -221,25 +213,7 @@ impl Router {
                         len = frame.payload.len(),
                         "Received frame from camera"
                     );
-
-                    // Update stats
-                    {
-                        let mut stats = self.inner.stats.write().await;
-                        stats.frames_received += 1;
-                    }
-
-                    // Broadcast to all subscribers
-                    match self.inner.frame_tx.send(frame) {
-                        Ok(n) => {
-                            let mut stats = self.inner.stats.write().await;
-                            stats.frames_broadcast += 1;
-                            debug!(subscribers = n, "Frame broadcast");
-                        }
-                        Err(_) => {
-                            // No subscribers - that's okay
-                            debug!("No subscribers for frame");
-                        }
-                    }
+                    self.broadcast_frame(frame).await;
                 }
                 Ok(None) => {
                     info!(camera = %remote, "Camera stream closed");

@@ -6,6 +6,8 @@ use iroh::{PublicKey, SecretKey};
 use std::path::Path;
 use tracing::info;
 
+use crate::ALPN;
+
 /// Wrapper around iroh Endpoint with Yurei-specific configuration
 pub struct YureiEndpoint {
     endpoint: Endpoint,
@@ -41,7 +43,7 @@ impl YureiEndpoint {
         let endpoint = Endpoint::builder()
             .secret_key(secret_key)
             .relay_mode(RelayMode::Default)
-            .alpns(vec![yurei_core::ALPN.to_vec()])
+            .alpns(vec![ALPN.to_vec()])
             .bind()
             .await?;
 
@@ -62,7 +64,7 @@ impl YureiEndpoint {
     ///
     /// Uses iroh's discovery services to find the relay URL and direct addresses.
     pub async fn connect(&self, remote: PublicKey) -> Result<Connection> {
-        let conn = self.endpoint.connect(remote, yurei_core::ALPN).await?;
+        let conn = self.endpoint.connect(remote, ALPN).await?;
         Ok(conn)
     }
 
