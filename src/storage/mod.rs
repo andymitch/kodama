@@ -34,5 +34,5 @@ pub trait StorageBackend: Send + Sync {
     async fn available_bytes(&self) -> Result<Option<u64>>;
 }
 
-pub use local::LocalStorage;
-pub use cloud::CloudStorage;
+pub use local::{LocalStorage, LocalStorageConfig};
+pub use cloud::{CloudStorage, CloudStorageConfig};

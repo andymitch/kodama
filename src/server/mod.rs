@@ -11,5 +11,5 @@ mod clients;
 mod storage;
 
 pub use router::{Router, RouterHandle, RouterStats, PeerRole};
-pub use clients::ClientManager;
-pub use storage::StorageManager;
+pub use clients::{ClientManager, ClientPermissions, ClientInfo};
+pub use storage::{StorageManager, StorageConfig, StorageStats};

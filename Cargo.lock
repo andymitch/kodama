@@ -3865,6 +3865,7 @@ dependencies = [
  "iroh",
  "rand",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
