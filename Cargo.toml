@@ -1,7 +1,27 @@
+[package]
+name = "yurei"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/anthropics/yurei"
+description = "Privacy-focused P2P security camera system"
+
+[features]
+default = []
+test-source = []
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+serde = { version = "1", features = ["derive"] }
+bytes = { version = "1", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+rand = "0.9"
+
 [workspace]
-resolver = "2"
 members = [
-    "crates/yurei",
     "apps/yurei-camera",
     "apps/yurei-server-bin",
     "apps/yurei-desktop",
@@ -14,29 +34,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/anthropics/yurei"
 
 [workspace.dependencies]
-# Async runtime
+yurei = { path = "." }
 tokio = { version = "1", features = ["full"] }
-
-# Iroh P2P - using git main for latest compatible dependencies
 iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
-
-# Pin digest to rc version compatible with curve25519-dalek pre-release
-digest = "0.11.0-rc.9"
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 bytes = { version = "1", features = ["serde"] }
-
-# Error handling
 anyhow = "1"
 thiserror = "2"
-
-# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Random
 rand = "0.9"
-
-# Internal crate
-yurei = { path = "crates/yurei" }
