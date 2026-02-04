@@ -1507,41 +1507,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "kodama-camera"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "kodama",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "kodama-desktop"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "kodama",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "kodama-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "kodama",
- "tokio",
- "tracing",
  "tracing-subscriber",
 ]
 

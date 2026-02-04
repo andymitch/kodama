@@ -33,7 +33,7 @@ cargo test
 
 ## Project Structure
 
-The codebase is organized as a single Rust library (`kodama`) with modular architecture, plus application binaries:
+The codebase is organized as a single Rust crate with library modules and application binaries:
 
 ```
 kodama/
@@ -55,13 +55,14 @@ kodama/
 │   │   ├── router.rs    # Frame routing to clients
 │   │   ├── clients.rs   # Client connection management
 │   │   └── storage.rs   # Storage manager
-│   └── storage/         # Persistence backends
-│       ├── local.rs     # Filesystem backend
-│       └── cloud.rs     # S3/R2 backend
-├── apps/
-│   ├── kodama-camera/   # Camera binary (Pi Zero 2W)
-│   ├── kodama-server/   # Headless server binary
-│   └── kodama-desktop/  # Desktop client (Tauri)
+│   ├── storage/         # Persistence backends
+│   │   ├── local.rs     # Filesystem backend
+│   │   └── cloud.rs     # S3/R2 backend
+│   └── bin/             # Application binaries
+│       ├── kodama-camera/   # Camera binary (Pi Zero 2W)
+│       ├── kodama-desktop/  # Desktop client
+│       ├── kodama-relay/    # Relay server for NAT traversal
+│       └── kodama-server/   # Headless server binary
 ├── docs/
 │   └── architecture/    # ADRs and specs
 └── scripts/
@@ -107,13 +108,14 @@ See [docs/architecture/adr-001-three-module-system.md](docs/architecture/adr-001
 ### Building
 
 ```bash
-# Build all crates
+# Build library and all binaries
 cargo build
 
 # Build specific binary
-cargo build -p kodama-camera
-cargo build -p kodama-server
-cargo build -p kodama-desktop
+cargo build --bin kodama-camera
+cargo build --bin kodama-server
+cargo build --bin kodama-desktop
+cargo build --bin kodama-relay
 ```
 
 ### Testing
@@ -123,7 +125,7 @@ cargo build -p kodama-desktop
 cargo test
 
 # Run with test video source (no hardware needed)
-cargo run -p kodama-camera --features test-source
+cargo run --bin kodama-camera --features test-source
 ```
 
 ### Known Issues

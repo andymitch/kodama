@@ -39,9 +39,9 @@ trap cleanup EXIT
 
 # Build all binaries with test-source feature for camera
 echo "Building binaries..."
-cargo build --release -p kodama-server
-cargo build --release -p kodama-camera --features test-source
-cargo build --release -p kodama-desktop
+cargo build --release --bin kodama-server
+cargo build --release --bin kodama-camera --features test-source
+cargo build --release --bin kodama-desktop
 echo "Build complete."
 echo ""
 
