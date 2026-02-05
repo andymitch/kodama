@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
             #[cfg(feature = "test-source")]
             {
                 info!("Starting test audio source");
-                kodama::capture::start_test_audio(kodama::capture::TestAudioConfig::default())
+                Some(kodama::capture::start_test_audio(kodama::capture::TestAudioConfig::default()))
             }
             #[cfg(not(feature = "test-source"))]
             {

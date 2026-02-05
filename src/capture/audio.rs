@@ -11,6 +11,8 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
+#[cfg(feature = "test-source")]
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 

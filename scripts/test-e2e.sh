@@ -153,8 +153,10 @@ echo ""
 # Success criteria check
 echo "Checking success criteria..."
 
-CAMERA_FRAMES=$(grep "Stats:" /tmp/kodama-camera.log | tail -1 | grep -oE '[0-9]+ frames' | head -1 | grep -oE '[0-9]+' || echo "0")
-CLIENT_FRAMES=$(grep "Stats:" /tmp/kodama-client.log | tail -1 | grep -oE '[0-9]+ frames' | head -1 | grep -oE '[0-9]+' || echo "0")
+# Camera format: "Stats: video=601 (12 kf), audio=1002..."
+CAMERA_FRAMES=$(grep "Stats:" /tmp/kodama-camera.log | tail -1 | grep -oE 'video=[0-9]+' | grep -oE '[0-9]+' || echo "0")
+# Client format: "video=626 frames (16 kf)..."
+CLIENT_FRAMES=$(grep "video=" /tmp/kodama-client.log | tail -1 | grep -oE 'video=[0-9]+' | grep -oE '[0-9]+' || echo "0")
 
 echo "  Camera frames sent: $CAMERA_FRAMES"
 echo "  Client frames received: $CLIENT_FRAMES"
