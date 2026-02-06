@@ -44,12 +44,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.9"
 async-trait = "0.1"
 
+# Testing
+tempfile = "3"
+
 # Internal crates
 kodama-core = { path = "crates/kodama-core" }
 kodama-relay = { path = "crates/kodama-relay" }
 kodama-capture = { path = "crates/kodama-capture" }
 kodama-storage = { path = "crates/kodama-storage" }
 kodama-server = { path = "crates/kodama-server" }
-
-[workspace.dev-dependencies]
-tempfile = "3"
