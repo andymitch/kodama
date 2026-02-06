@@ -34,8 +34,13 @@
     connectionState = 'connecting';
     try {
       const key = await invoke<string>('start_server', {
-        storageEnabled,
-        storagePath: storageEnabled ? storagePath : null
+        storageConfig: storageEnabled ? {
+          enabled: true,
+          path: storagePath,
+          max_gb: 10,
+          retention_days: 7,
+          keyframes_only: false
+        } : null
       });
       serverKey = key;
       mode = 'server';
@@ -90,7 +95,7 @@
 
   async function refreshCameras() {
     try {
-      cameras = await invoke('get_cameras');
+      cameras = await invoke('list_cameras');
     } catch (e) {
       console.error('Failed to get cameras:', e);
     }

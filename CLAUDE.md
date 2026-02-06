@@ -12,9 +12,9 @@ This pins crypto dependencies (`sha2`, `digest`) to specific versions needed for
 
 ### Build
 ```bash
-cargo build                        # All binaries
-cargo build --bin kodama-camera    # Specific binary
-cargo build --features test-source --bin kodama-camera  # With synthetic test source
+cargo build                        # All workspace crates
+cargo build -p kodama-camera       # Specific app
+cargo build -p kodama-camera --features test-source  # With synthetic test source
 ```
 
 ### Test
@@ -27,29 +27,43 @@ cargo test <name_substring>        # Single test by name
 ### Run
 ```bash
 # Server (prints public key for cameras/clients)
-cargo run --bin kodama-server
+cargo run -p kodama-server-cli
 
 # Camera (requires server key)
-KODAMA_SERVER_KEY=<base32_key> cargo run --bin kodama-camera
+KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-camera
 
 # Camera with test source (no hardware)
-KODAMA_SERVER_KEY=<key> cargo run --features test-source --bin kodama-camera -- --test-source
+KODAMA_SERVER_KEY=<key> cargo run -p kodama-camera --features test-source -- --test-source
 
-# Desktop client
-KODAMA_SERVER_KEY=<key> cargo run --bin kodama-desktop
+# CLI client
+KODAMA_SERVER_KEY=<key> cargo run -p kodama-client
+
+# Desktop app (Tauri)
+cd apps/kodama-desktop && npm run tauri dev
+
+# Mobile app (Tauri)
+cd apps/kodama-mobile && npm run tauri dev
 ```
 
 ## Architecture
 
 Kodama is a privacy-focused P2P security camera system using Iroh for transport.
 
-### Module Layout (single crate, no workspace)
-- **core/** - Frame type, Channel enum, SourceId, protocol constants (ALPN: "kodama/0")
-- **capture/** - Video/audio/telemetry capture, H.264 keyframe detection
-- **relay/** - Iroh endpoint wrapper (`transport/`) and frame serialization (`mux/`)
-- **server/** - Router (broadcast channel), ClientManager, StorageManager
-- **storage/** - StorageBackend trait with local filesystem and cloud (S3/R2) implementations
-- **bin/** - Four binaries: kodama-camera, kodama-server, kodama-desktop, kodama-relay
+### Module Layout (Cargo workspace)
+
+**Library crates** (`crates/`):
+- **kodama-core** - Frame type, Channel enum, SourceId, protocol constants (ALPN: "kodama/0")
+- **kodama-capture** - Video/audio/telemetry capture, H.264 keyframe detection
+- **kodama-relay** - Iroh endpoint wrapper (`transport/`) and frame serialization (`mux/`)
+- **kodama-server** - Router (broadcast channel), ClientManager, StorageManager
+- **kodama-storage** - StorageBackend trait with local filesystem and cloud (S3/R2) implementations
+
+**Application crates** (`apps/`):
+- **kodama-server-cli** - Headless server binary
+- **kodama-camera** - Camera capture binary
+- **kodama-client** - Lite CLI viewer (client-only)
+- **kodama-desktop** - Tauri + SvelteKit desktop app (server + client modes)
+- **kodama-mobile** - Tauri + SvelteKit mobile app (server + client modes)
 
 ### Data Flow
 ```
