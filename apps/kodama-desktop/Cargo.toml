@@ -1,5 +1,0 @@
-# This is a virtual manifest for the desktop app
-# The actual Rust code is in src-tauri/
-
-[workspace]
-members = ["src-tauri"]

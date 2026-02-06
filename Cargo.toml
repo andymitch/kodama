@@ -9,8 +9,8 @@ members = [
     "apps/kodama-server-cli",
     "apps/kodama-camera",
     "apps/kodama-client",
-    "apps/kodama-desktop",
-    "apps/kodama-mobile",
+    "apps/kodama-desktop/src-tauri",
+    "apps/kodama-mobile/src-tauri",
 ]
 
 [workspace.package]
