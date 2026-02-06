@@ -1,43 +1,55 @@
-[package]
-name = "kodama"
+[workspace]
+resolver = "2"
+members = [
+    "crates/kodama-core",
+    "crates/kodama-relay",
+    "crates/kodama-capture",
+    "crates/kodama-storage",
+    "crates/kodama-server",
+    "apps/kodama-server-cli",
+    "apps/kodama-camera",
+    "apps/kodama-client",
+    "apps/kodama-desktop/src-tauri",
+    "apps/kodama-mobile/src-tauri",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/andymitch/kodama"
 description = "Privacy-focused P2P security camera system"
 
-[features]
-default = []
-test-source = []
-
-[dependencies]
+[workspace.dependencies]
+# Async runtime
 tokio = { version = "1", features = ["full"] }
+
+# Networking
 iroh = { git = "https://github.com/n0-computer/iroh", branch = "main" }
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 bytes = { version = "1", features = ["serde"] }
+
+# Error handling
 anyhow = "1"
 thiserror = "2"
+
+# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
 rand = "0.9"
 async-trait = "0.1"
-serde_json = "1"
 
-[dev-dependencies]
+# Testing
 tempfile = "3"
 
-[[bin]]
-name = "kodama-camera"
-path = "src/bin/kodama-camera/main.rs"
-
-[[bin]]
-name = "kodama-desktop"
-path = "src/bin/kodama-desktop/main.rs"
-
-[[bin]]
-name = "kodama-relay"
-path = "src/bin/kodama-relay/main.rs"
-
-[[bin]]
-name = "kodama-server"
-path = "src/bin/kodama-server/main.rs"
+# Internal crates
+kodama-core = { path = "crates/kodama-core" }
+kodama-relay = { path = "crates/kodama-relay" }
+kodama-capture = { path = "crates/kodama-capture" }
+kodama-storage = { path = "crates/kodama-storage" }
+kodama-server = { path = "crates/kodama-server" }

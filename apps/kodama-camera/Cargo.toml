@@ -1,0 +1,22 @@
+[package]
+name = "kodama-camera"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Camera capture binary for Kodama"
+
+[features]
+default = []
+test-source = ["kodama-capture/test-source"]
+
+[dependencies]
+kodama-core = { workspace = true }
+kodama-relay = { workspace = true }
+kodama-capture = { workspace = true }
+tokio = { workspace = true }
+iroh = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

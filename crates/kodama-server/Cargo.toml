@@ -1,0 +1,20 @@
+[package]
+name = "kodama-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Server logic library for Kodama (Router, ClientManager, StorageManager)"
+
+[dependencies]
+kodama-core = { workspace = true }
+kodama-relay = { workspace = true }
+kodama-storage = { workspace = true }
+tokio = { workspace = true }
+iroh = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+bytes = { workspace = true }

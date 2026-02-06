@@ -1,0 +1,19 @@
+[package]
+name = "kodama-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Storage backends for Kodama recordings"
+
+[dependencies]
+kodama-core = { workspace = true }
+kodama-relay = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
