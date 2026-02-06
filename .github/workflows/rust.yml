@@ -34,7 +34,15 @@ jobs:
           echo "digest pinning skipped"
 
     - name: Build
-      run: cargo build --verbose
+      run: |
+        # Exclude Tauri apps from build - they require frontend to be built first
+        # The desktop/mobile apps will be built in a separate workflow with frontend
+        cargo build --verbose \
+          --exclude kodama-desktop \
+          --exclude kodama-mobile
 
     - name: Run tests
-      run: cargo test --verbose
+      run: |
+        cargo test --verbose \
+          --exclude kodama-desktop \
+          --exclude kodama-mobile

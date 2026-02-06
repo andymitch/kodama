@@ -1,9 +1,8 @@
 //! Tauri commands for the desktop app
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use kodama_relay::Relay;
 use kodama_server::{

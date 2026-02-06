@@ -45,6 +45,13 @@ impl Relay {
         self.endpoint.public_key()
     }
 
+    /// Get this relay's public key as a base32 string
+    ///
+    /// This is the format used for sharing with users.
+    pub fn public_key_base32(&self) -> String {
+        self.endpoint.public_key().to_string()
+    }
+
     /// Connect to a remote endpoint by its public key
     ///
     /// Uses iroh's discovery services to locate the peer.
