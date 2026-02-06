@@ -37,12 +37,12 @@ jobs:
       run: |
         # Exclude Tauri apps from build - they require frontend to be built first
         # The desktop/mobile apps will be built in a separate workflow with frontend
-        cargo build --verbose \
+        cargo build --verbose --workspace \
           --exclude kodama-desktop \
           --exclude kodama-mobile
 
     - name: Run tests
       run: |
-        cargo test --verbose \
+        cargo test --verbose --workspace \
           --exclude kodama-desktop \
           --exclude kodama-mobile
