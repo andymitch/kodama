@@ -16,7 +16,7 @@ use kodama_server::{
 use kodama_capture::decode_telemetry;
 
 use crate::events::{
-    AudioDataEvent, AudioLevelEvent, CameraEvent, TelemetryEvent, VideoInitEvent, VideoSegmentEvent,
+    AudioDataEvent, AudioLevelEvent, CameraEvent, GpsEvent, TelemetryEvent, VideoInitEvent, VideoSegmentEvent,
 };
 use crate::fmp4_ffmpeg::Fmp4Muxer; // Using FFmpeg-based muxer
 use crate::state::{AppMode, AppState, ServerState, ClientState, CameraInfo, StorageConfig, AppSettings};
@@ -160,6 +160,15 @@ fn process_frame(
                     disk_usage: telemetry.disk_usage,
                     uptime_secs: telemetry.uptime_secs,
                     load_average: telemetry.load_average,
+                    gps: telemetry.gps.map(|g| GpsEvent {
+                        latitude: g.latitude,
+                        longitude: g.longitude,
+                        altitude: g.altitude,
+                        speed: g.speed,
+                        heading: g.heading,
+                        fix_mode: g.fix_mode,
+                    }),
+                    motion_level: telemetry.motion_level,
                 });
             }
         }

@@ -14,7 +14,7 @@ pub mod h264;
 // Re-export commonly used types
 pub use video::{VideoCapture, VideoCaptureConfig};
 pub use audio::{AudioCapture, AudioCaptureConfig};
-pub use telemetry::{TelemetryCapture, TelemetryCaptureConfig, TelemetryData, encode_telemetry, decode_telemetry};
+pub use telemetry::{TelemetryCapture, TelemetryCaptureConfig, TelemetryData, GpsData, MotionDetector, encode_telemetry, decode_telemetry};
 
 #[cfg(feature = "test-source")]
 pub use video::{start_test_source, TestSourceConfig};

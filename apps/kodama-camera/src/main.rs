@@ -31,7 +31,7 @@ use kodama_relay::Relay;
 use kodama_capture::{
     h264,
     AudioCapture, AudioCaptureConfig,
-    TelemetryCapture, TelemetryCaptureConfig,
+    MotionDetector, TelemetryCapture, TelemetryCaptureConfig,
     VideoCaptureConfig,
 };
 
@@ -242,12 +242,18 @@ async fn main() -> Result<()> {
         false
     };
 
+    // Create motion detector (shares motion level with telemetry)
+    let (mut motion_detector, motion_level_shared) = MotionDetector::new();
+
     // Start telemetry capture
     let mut _telemetry_capture_handle = None;
     let _telemetry_enabled = if config.enable_telemetry {
         let telemetry_tx = combined_tx.clone();
 
-        match TelemetryCapture::start(config.telemetry.clone()) {
+        let mut telemetry_config = config.telemetry.clone();
+        telemetry_config.motion_level = Some(motion_level_shared);
+
+        match TelemetryCapture::start(telemetry_config) {
             Ok((capture, mut rx)) => {
                 _telemetry_capture_handle = Some(capture);
                 info!("Telemetry capture started (interval: {}s)", config.telemetry.interval_secs);
@@ -296,6 +302,8 @@ async fn main() -> Result<()> {
                 if is_keyframe {
                     keyframe_count += 1;
                 }
+                // Update motion detector with frame size
+                motion_detector.update(is_keyframe, payload.len());
                 Frame::video(source_id, payload, is_keyframe)
                     .with_timestamp(timestamp_us)
             }

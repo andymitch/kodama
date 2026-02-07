@@ -320,7 +320,22 @@ fn split_h264_frames(data: &[u8]) -> Vec<(Vec<u8>, bool)> {
     frames
 }
 
-/// Start a test video source that generates real H.264 Annex B frames
+/// Build an H.264 filler data NAL unit of the given size.
+/// Filler NAL (type 12) is ignored by decoders, used to pad bitstreams.
+#[cfg(feature = "test-source")]
+fn h264_filler_nal(size: usize) -> Vec<u8> {
+    let mut nal = Vec::with_capacity(size + 5);
+    nal.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x0C]); // start code + filler type
+    // Filler bytes (0xFF per spec), then RBSP stop bit (0x80)
+    let payload_len = size.saturating_sub(1);
+    nal.extend(std::iter::repeat(0xFF).take(payload_len));
+    nal.push(0x80);
+    nal
+}
+
+/// Start a test video source that generates real H.264 Annex B frames.
+/// Simulates periodic motion bursts by padding P-frames with varying amounts
+/// of filler NAL units so the motion detector sees realistic frame-size variance.
 #[cfg(feature = "test-source")]
 pub fn start_test_source(config: TestSourceConfig) -> mpsc::Receiver<Bytes> {
     use tokio::time::{interval, Duration};
@@ -333,20 +348,46 @@ pub fn start_test_source(config: TestSourceConfig) -> mpsc::Receiver<Bytes> {
         let mut frame_idx = 0usize;
         let mut total_sent = 0u64;
 
+        // Motion simulation: 5s calm, 3s motion, repeating
+        let calm_frames = config.fps as u64 * 5;
+        let motion_frames = config.fps as u64 * 3;
+        let cycle_len = calm_frames + motion_frames;
+
+        // Simple LCG for deterministic pseudo-random padding sizes
+        let mut rng_state: u32 = 42;
+
         info!(
-            "Test video source started: {}fps, {} H.264 frames (looping)",
+            "Test video source started: {}fps, {} H.264 frames (looping), motion bursts every {}s",
             config.fps,
-            frames.len()
+            frames.len(),
+            cycle_len / config.fps as u64,
         );
 
         loop {
             interval.tick().await;
 
-            let (ref data, _is_keyframe) = frames[frame_idx];
+            let (ref data, is_keyframe) = frames[frame_idx];
             frame_idx = (frame_idx + 1) % frames.len();
             total_sent += 1;
 
-            if tx.send(Bytes::from(data.clone())).await.is_err() {
+            // During motion bursts, pad P-frames with varying filler NALs
+            // (1x-5x multiplier, simulating variable motion intensity per-frame)
+            let cycle_pos = total_sent % cycle_len;
+            let in_motion = cycle_pos >= calm_frames;
+
+            let frame_data = if in_motion && !is_keyframe {
+                // LCG: state = state * 1103515245 + 12345
+                rng_state = rng_state.wrapping_mul(1103515245).wrapping_add(12345);
+                let multiplier = 1 + (rng_state >> 16) % 5; // 1-5x
+                let pad_size = data.len() * multiplier as usize;
+                let mut padded = data.clone();
+                padded.extend_from_slice(&h264_filler_nal(pad_size));
+                padded
+            } else {
+                data.clone()
+            };
+
+            if tx.send(Bytes::from(frame_data)).await.is_err() {
                 info!("Test source receiver dropped");
                 break;
             }

@@ -1,15 +1,36 @@
 //! Telemetry capture module
 //!
-//! Collects system metrics (CPU, temperature, disk usage, etc.)
-//! and encodes as JSON for streaming. Works on Linux systems.
+//! Collects system metrics (CPU, temperature, disk usage, etc.),
+//! GPS position, and video motion level. Encodes as JSON for streaming.
+//! Works on Linux systems.
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+
+/// GPS position data
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpsData {
+    /// Latitude in degrees (positive = north)
+    pub latitude: f64,
+    /// Longitude in degrees (positive = east)
+    pub longitude: f64,
+    /// Altitude in meters above sea level (None if unavailable)
+    pub altitude: Option<f64>,
+    /// Ground speed in m/s (None if unavailable)
+    pub speed: Option<f64>,
+    /// Heading/track in degrees from true north (None if unavailable)
+    pub heading: Option<f64>,
+    /// GPS fix mode: 2 = 2D, 3 = 3D
+    pub fix_mode: u8,
+}
 
 /// Telemetry data from a camera
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +51,12 @@ pub struct TelemetryData {
     pub uptime_secs: u64,
     /// Load average (1, 5, 15 minutes)
     pub load_average: [f32; 3],
+    /// GPS position (None if no GPS available)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gps: Option<GpsData>,
+    /// Video motion detection level (0.0 = no motion, 1.0 = max motion)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub motion_level: Option<f32>,
 }
 
 impl Default for TelemetryData {
@@ -43,6 +70,8 @@ impl Default for TelemetryData {
             network_rx_bytes: 0,
             uptime_secs: 0,
             load_average: [0.0, 0.0, 0.0],
+            gps: None,
+            motion_level: None,
         }
     }
 }
@@ -56,6 +85,10 @@ pub struct TelemetryCaptureConfig {
     pub network_interface: Option<String>,
     /// Disk path to monitor for usage
     pub disk_path: String,
+    /// Enable GPS reading from gpsd (localhost:2947)
+    pub enable_gps: bool,
+    /// Shared motion level from video motion detector (None if not connected)
+    pub motion_level: Option<Arc<AtomicU32>>,
 }
 
 impl Default for TelemetryCaptureConfig {
@@ -64,6 +97,8 @@ impl Default for TelemetryCaptureConfig {
             interval_secs: 5,
             network_interface: None,
             disk_path: "/".to_string(),
+            enable_gps: true,
+            motion_level: None,
         }
     }
 }
@@ -81,15 +116,33 @@ impl TelemetryCapture {
         let (tx, rx) = mpsc::channel(16);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
 
+        let motion_level = config.motion_level.clone();
+
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs as u64));
             let mut prev_cpu_stats: Option<CpuStats> = None;
+            let mut gps_reader = if config.enable_gps {
+                GpsdReader::new().await
+            } else {
+                None
+            };
 
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
                         match collect_telemetry(&config, &mut prev_cpu_stats) {
-                            Ok(data) => {
+                            Ok(mut data) => {
+                                // Read GPS if available
+                                if let Some(ref mut reader) = gps_reader {
+                                    data.gps = reader.latest_fix().await;
+                                }
+
+                                // Read motion level if available
+                                if let Some(ref ml) = motion_level {
+                                    let bits = ml.load(Ordering::Relaxed);
+                                    data.motion_level = Some(f32::from_bits(bits));
+                                }
+
                                 match encode_telemetry(&data) {
                                     Ok(bytes) => {
                                         if tx.send(bytes).await.is_err() {
@@ -387,6 +440,190 @@ pub fn decode_telemetry(data: &[u8]) -> Result<TelemetryData> {
         .context("Failed to deserialize telemetry")
 }
 
+// --- GPS reader via gpsd JSON protocol ---
+
+/// Reads GPS data from gpsd daemon (localhost:2947)
+struct GpsdReader {
+    latest: Option<GpsData>,
+    rx: mpsc::Receiver<GpsData>,
+}
+
+impl GpsdReader {
+    /// Try to connect to gpsd. Returns None if gpsd is not available.
+    async fn new() -> Option<Self> {
+        let (tx, rx) = mpsc::channel(4);
+
+        let stream = match tokio::net::TcpStream::connect("127.0.0.1:2947").await {
+            Ok(s) => s,
+            Err(_) => {
+                debug!("gpsd not available at 127.0.0.1:2947, GPS disabled");
+                return None;
+            }
+        };
+
+        debug!("Connected to gpsd");
+
+        tokio::spawn(async move {
+            if let Err(e) = gpsd_read_loop(stream, tx).await {
+                debug!("gpsd reader ended: {}", e);
+            }
+        });
+
+        Some(Self { latest: None, rx })
+    }
+
+    /// Get the latest GPS fix, draining any queued updates
+    async fn latest_fix(&mut self) -> Option<GpsData> {
+        // Drain all pending updates, keep the latest
+        while let Ok(fix) = self.rx.try_recv() {
+            self.latest = Some(fix);
+        }
+        self.latest.clone()
+    }
+}
+
+/// Background loop that reads JSON lines from gpsd
+async fn gpsd_read_loop(stream: tokio::net::TcpStream, tx: mpsc::Sender<GpsData>) -> Result<()> {
+    let (reader, mut writer) = stream.into_split();
+
+    // Enable JSON watch mode
+    writer.write_all(b"?WATCH={\"enable\":true,\"json\":true}\n").await
+        .context("Failed to send WATCH to gpsd")?;
+
+    let mut lines = BufReader::new(reader).lines();
+    while let Some(line) = lines.next_line().await.context("gpsd read error")? {
+        // Parse TPV (Time-Position-Velocity) reports
+        if let Some(gps) = parse_gpsd_tpv(&line) {
+            if tx.send(gps).await.is_err() {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a gpsd TPV JSON report into GpsData
+fn parse_gpsd_tpv(line: &str) -> Option<GpsData> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+
+    if v.get("class")?.as_str()? != "TPV" {
+        return None;
+    }
+
+    let mode = v.get("mode")?.as_u64()? as u8;
+    // mode 0/1 = no fix
+    if mode < 2 {
+        return None;
+    }
+
+    let lat = v.get("lat")?.as_f64()?;
+    let lon = v.get("lon")?.as_f64()?;
+
+    Some(GpsData {
+        latitude: lat,
+        longitude: lon,
+        altitude: v.get("alt").and_then(|v| v.as_f64()),
+        speed: v.get("speed").and_then(|v| v.as_f64()),
+        heading: v.get("track").and_then(|v| v.as_f64()),
+        fix_mode: mode,
+    })
+}
+
+// --- Video motion detector ---
+
+/// Estimates motion level from H.264 frame-size variance with auto-calibration.
+///
+/// Computes a coefficient of variation (CV = std_dev / mean) from P-frame sizes,
+/// then compares the current CV against a slow-adapting baseline CV. Only
+/// deviations *above* the baseline register as motion — this auto-calibrates
+/// against the camera's natural frame-size variance (which varies by codec
+/// settings, resolution, and I/O chunking).
+pub struct MotionDetector {
+    /// Shared motion level (f32 stored as u32 bits) for telemetry to read
+    level: Arc<AtomicU32>,
+    /// Fast EMA of frame size (alpha=0.03, ~33 frames)
+    ema_size: f64,
+    /// Fast EMA of frame size squared (for variance)
+    ema_size_sq: f64,
+    /// Slow-adapting baseline CV (alpha=0.002, ~500 frames ≈ 8-17s)
+    baseline_cv: f64,
+    /// Current smoothed motion level (fast rise, slow decay)
+    smoothed: f64,
+    /// Number of P-frames seen (for warmup)
+    frame_count: u64,
+}
+
+impl MotionDetector {
+    /// Create a new motion detector. Returns the detector and a shared atomic
+    /// that the telemetry collector reads from.
+    pub fn new() -> (Self, Arc<AtomicU32>) {
+        let level = Arc::new(AtomicU32::new(0));
+        let detector = Self {
+            level: level.clone(),
+            ema_size: 0.0,
+            ema_size_sq: 0.0,
+            baseline_cv: 0.0,
+            smoothed: 0.0,
+            frame_count: 0,
+        };
+        (detector, level)
+    }
+
+    /// Feed a video frame to update the motion estimate.
+    /// `is_keyframe`: true for I-frames, false for P-frames.
+    /// `payload_size`: size of the H.264 frame payload in bytes.
+    pub fn update(&mut self, is_keyframe: bool, payload_size: usize) {
+        // Skip keyframes — always large regardless of motion
+        if is_keyframe {
+            return;
+        }
+
+        let size = payload_size as f64;
+        self.frame_count += 1;
+
+        if self.frame_count == 1 {
+            self.ema_size = size;
+            self.ema_size_sq = size * size;
+            self.level.store(0f32.to_bits(), Ordering::Relaxed);
+            return;
+        }
+
+        // Fast EMA of size and size² (alpha=0.03, ~33 frames ≈ 0.5-1s)
+        let alpha = 0.03;
+        self.ema_size = self.ema_size * (1.0 - alpha) + size * alpha;
+        self.ema_size_sq = self.ema_size_sq * (1.0 - alpha) + (size * size) * alpha;
+
+        // Current CV from fast EMAs
+        let variance = (self.ema_size_sq - self.ema_size * self.ema_size).max(0.0);
+        let cv = if self.ema_size > 0.0 {
+            variance.sqrt() / self.ema_size
+        } else {
+            0.0
+        };
+
+        // Slow-adapting baseline CV (alpha=0.002, ~500 frames ≈ 8-17s)
+        // During warmup (<100 frames), adapt faster to establish initial baseline
+        let baseline_alpha = if self.frame_count < 100 { 0.05 } else { 0.002 };
+        self.baseline_cv = self.baseline_cv * (1.0 - baseline_alpha) + cv * baseline_alpha;
+
+        // Motion = how much current CV exceeds baseline
+        let excess = (cv - self.baseline_cv).max(0.0);
+        // Normalize: excess of 0.3+ above baseline = strong motion
+        let instant = (excess / 0.3).min(1.0);
+
+        // Fast rise (alpha=0.3), slow decay (alpha=0.005 ≈ 200 frames / ~3-7s)
+        if instant > self.smoothed {
+            self.smoothed = self.smoothed * 0.7 + instant * 0.3;
+        } else {
+            self.smoothed = self.smoothed * 0.995 + instant * 0.005;
+        }
+
+        let motion = (self.smoothed as f32).clamp(0.0, 1.0);
+        self.level.store(motion.to_bits(), Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +639,8 @@ mod tests {
             network_rx_bytes: 2000,
             uptime_secs: 3600,
             load_average: [0.5, 0.6, 0.7],
+            gps: None,
+            motion_level: None,
         };
 
         let encoded = encode_telemetry(&data).unwrap();
@@ -410,6 +649,42 @@ mod tests {
         assert!((decoded.cpu_usage - 25.5).abs() < 0.01);
         assert_eq!(decoded.cpu_temp, Some(45.0));
         assert_eq!(decoded.uptime_secs, 3600);
+        assert_eq!(decoded.gps, None);
+        assert_eq!(decoded.motion_level, None);
+    }
+
+    #[test]
+    fn test_telemetry_with_gps_and_motion() {
+        let data = TelemetryData {
+            gps: Some(GpsData {
+                latitude: 37.7749,
+                longitude: -122.4194,
+                altitude: Some(10.0),
+                speed: Some(0.5),
+                heading: Some(180.0),
+                fix_mode: 3,
+            }),
+            motion_level: Some(0.42),
+            ..Default::default()
+        };
+
+        let encoded = encode_telemetry(&data).unwrap();
+        let decoded = decode_telemetry(&encoded).unwrap();
+
+        let gps = decoded.gps.unwrap();
+        assert!((gps.latitude - 37.7749).abs() < 0.0001);
+        assert!((gps.longitude - (-122.4194)).abs() < 0.0001);
+        assert_eq!(gps.fix_mode, 3);
+        assert!((decoded.motion_level.unwrap() - 0.42).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_telemetry_backward_compatible_decode() {
+        // Old telemetry JSON without gps/motion_level should still decode
+        let old_json = r#"{"cpu_usage":10.0,"cpu_temp":null,"memory_usage":50.0,"disk_usage":30.0,"network_tx_bytes":0,"network_rx_bytes":0,"uptime_secs":100,"load_average":[0.1,0.2,0.3]}"#;
+        let decoded: TelemetryData = serde_json::from_str(old_json).unwrap();
+        assert_eq!(decoded.gps, None);
+        assert_eq!(decoded.motion_level, None);
     }
 
     #[test]
@@ -417,5 +692,82 @@ mod tests {
         let data = TelemetryData::default();
         assert_eq!(data.cpu_usage, 0.0);
         assert_eq!(data.cpu_temp, None);
+        assert_eq!(data.gps, None);
+        assert_eq!(data.motion_level, None);
+    }
+
+    #[test]
+    fn test_parse_gpsd_tpv() {
+        let tpv = r#"{"class":"TPV","mode":3,"lat":37.7749,"lon":-122.4194,"alt":10.5,"speed":1.2,"track":90.0}"#;
+        let gps = parse_gpsd_tpv(tpv).unwrap();
+        assert!((gps.latitude - 37.7749).abs() < 0.0001);
+        assert!((gps.longitude - (-122.4194)).abs() < 0.0001);
+        assert_eq!(gps.altitude, Some(10.5));
+        assert_eq!(gps.speed, Some(1.2));
+        assert_eq!(gps.heading, Some(90.0));
+        assert_eq!(gps.fix_mode, 3);
+    }
+
+    #[test]
+    fn test_parse_gpsd_tpv_no_fix() {
+        let tpv = r#"{"class":"TPV","mode":1}"#;
+        assert!(parse_gpsd_tpv(tpv).is_none());
+    }
+
+    #[test]
+    fn test_parse_gpsd_non_tpv() {
+        let sky = r#"{"class":"SKY","satellites":[]}"#;
+        assert!(parse_gpsd_tpv(sky).is_none());
+    }
+
+    #[test]
+    fn test_motion_detector_steady() {
+        let (mut detector, level) = MotionDetector::new();
+
+        // Feed steady P-frames - should converge to low motion
+        for _ in 0..100 {
+            detector.update(false, 5000);
+        }
+        let steady = f32::from_bits(level.load(Ordering::Relaxed));
+        assert!(steady < 0.05, "Steady frames should have very low motion: {}", steady);
+    }
+
+    #[test]
+    fn test_motion_detector_burst() {
+        let (mut detector, level) = MotionDetector::new();
+
+        // Establish baseline with steady frames
+        for _ in 0..100 {
+            detector.update(false, 5000);
+        }
+
+        // Feed large P-frames (motion burst)
+        for _ in 0..30 {
+            detector.update(false, 15000);
+        }
+        let motion = f32::from_bits(level.load(Ordering::Relaxed));
+        assert!(motion > 0.2, "Large frames should indicate motion: {}", motion);
+
+        // Motion should persist (slow decay) even after a few normal frames
+        for _ in 0..10 {
+            detector.update(false, 5000);
+        }
+        let after = f32::from_bits(level.load(Ordering::Relaxed));
+        assert!(after > 0.1, "Motion should decay slowly: {}", after);
+    }
+
+    #[test]
+    fn test_motion_detector_ignores_keyframes() {
+        let (mut detector, level) = MotionDetector::new();
+
+        for _ in 0..50 {
+            detector.update(false, 5000);
+        }
+        // Keyframes should not affect motion level
+        for _ in 0..10 {
+            detector.update(true, 50000);
+        }
+        let motion = f32::from_bits(level.load(Ordering::Relaxed));
+        assert!(motion < 0.05, "Keyframes should not trigger motion: {}", motion);
     }
 }

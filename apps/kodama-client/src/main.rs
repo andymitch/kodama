@@ -221,8 +221,18 @@ async fn main() -> Result<()> {
                 if config.show_telemetry && last_telemetry_display.elapsed().as_secs() >= 5 {
                     for (source, s) in &sources {
                         if let Some(ref telemetry) = s.last_telemetry {
+                            let motion_str = telemetry.motion_level
+                                .map(|m| format!(", Motion={:.2}", m))
+                                .unwrap_or_default();
+                            let gps_str = telemetry.gps.as_ref()
+                                .map(|g| format!(", GPS={:.5},{:.5} fix={}D{}{}",
+                                    g.latitude, g.longitude, g.fix_mode,
+                                    g.speed.map(|s| format!(" {:.1}m/s", s)).unwrap_or_default(),
+                                    g.altitude.map(|a| format!(" {:.1}m", a)).unwrap_or_default(),
+                                ))
+                                .unwrap_or_default();
                             info!(
-                                "Telemetry [{}]: CPU={:.1}%{}, Mem={:.1}%, Load=[{:.2}, {:.2}, {:.2}], Up={}s",
+                                "Telemetry [{}]: CPU={:.1}%{}, Mem={:.1}%, Load=[{:.2}, {:.2}, {:.2}], Up={}s{}{}",
                                 source,
                                 telemetry.cpu_usage,
                                 telemetry.cpu_temp.map(|t| format!(", Temp={:.1}C", t)).unwrap_or_default(),
@@ -230,7 +240,9 @@ async fn main() -> Result<()> {
                                 telemetry.load_average[0],
                                 telemetry.load_average[1],
                                 telemetry.load_average[2],
-                                telemetry.uptime_secs
+                                telemetry.uptime_secs,
+                                motion_str,
+                                gps_str,
                             );
                         }
                     }

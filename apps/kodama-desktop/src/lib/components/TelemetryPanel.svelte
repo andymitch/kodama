@@ -17,6 +17,32 @@
     return `${h}h ${m}m`;
   }
 
+  function formatCoord(lat: number, lon: number): string {
+    const latDir = lat >= 0 ? 'N' : 'S';
+    const lonDir = lon >= 0 ? 'E' : 'W';
+    return `${Math.abs(lat).toFixed(5)}${latDir} ${Math.abs(lon).toFixed(5)}${lonDir}`;
+  }
+
+  function formatSpeed(mps: number): string {
+    // Convert m/s to km/h
+    const kmh = mps * 3.6;
+    return `${kmh.toFixed(1)} km/h`;
+  }
+
+  function motionLabel(level: number): string {
+    if (level < 0.1) return 'None';
+    if (level < 0.3) return 'Low';
+    if (level < 0.6) return 'Medium';
+    return 'High';
+  }
+
+  function motionColor(level: number): string {
+    if (level < 0.1) return 'text-muted-foreground';
+    if (level < 0.3) return 'text-green-500';
+    if (level < 0.6) return 'text-yellow-500';
+    return 'text-red-500';
+  }
+
   onMount(async () => {
     if (!('__TAURI__' in window)) return;
 
@@ -61,6 +87,30 @@
       <span class="text-muted-foreground">Up</span>
       <span>{formatUptime(telemetry.uptime_secs)}</span>
     </div>
+    {#if telemetry.motion_level !== null}
+      <div class="flex justify-between">
+        <span class="text-muted-foreground">Motion</span>
+        <span class={motionColor(telemetry.motion_level)}>{motionLabel(telemetry.motion_level)}</span>
+      </div>
+    {/if}
+    {#if telemetry.gps}
+      <div class="flex justify-between col-span-2">
+        <span class="text-muted-foreground">GPS</span>
+        <span>{formatCoord(telemetry.gps.latitude, telemetry.gps.longitude)}</span>
+      </div>
+      {#if telemetry.gps.speed !== null}
+        <div class="flex justify-between">
+          <span class="text-muted-foreground">Speed</span>
+          <span>{formatSpeed(telemetry.gps.speed)}</span>
+        </div>
+      {/if}
+      {#if telemetry.gps.altitude !== null}
+        <div class="flex justify-between">
+          <span class="text-muted-foreground">Alt</span>
+          <span>{telemetry.gps.altitude.toFixed(1)}m</span>
+        </div>
+      {/if}
+    {/if}
   </div>
 {:else}
   <div class="px-2 py-1 text-xs text-muted-foreground">Waiting for telemetry...</div>

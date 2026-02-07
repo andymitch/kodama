@@ -30,6 +30,15 @@ export interface AudioDataEvent {
 	channels: number;
 }
 
+export interface GpsData {
+	latitude: number;
+	longitude: number;
+	altitude: number | null;
+	speed: number | null;
+	heading: number | null;
+	fix_mode: number;
+}
+
 export interface TelemetryEvent {
 	source_id: string;
 	cpu_usage: number;
@@ -38,4 +47,6 @@ export interface TelemetryEvent {
 	disk_usage: number;
 	uptime_secs: number;
 	load_average: [number, number, number];
+	gps: GpsData | null;
+	motion_level: number | null;
 }

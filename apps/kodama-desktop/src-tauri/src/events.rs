@@ -49,6 +49,17 @@ pub struct AudioDataEvent {
     pub channels: u8,
 }
 
+/// GPS position data for frontend
+#[derive(Debug, Clone, Serialize)]
+pub struct GpsEvent {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub altitude: Option<f64>,
+    pub speed: Option<f64>,
+    pub heading: Option<f64>,
+    pub fix_mode: u8,
+}
+
 /// Telemetry data event
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryEvent {
@@ -59,4 +70,6 @@ pub struct TelemetryEvent {
     pub disk_usage: f32,
     pub uptime_secs: u64,
     pub load_average: [f32; 3],
+    pub gps: Option<GpsEvent>,
+    pub motion_level: Option<f32>,
 }
