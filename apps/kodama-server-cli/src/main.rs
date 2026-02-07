@@ -59,7 +59,7 @@ impl Config {
         let buffer_capacity: usize = std::env::var("KODAMA_BUFFER_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(64);
+            .unwrap_or(512);
 
         let storage_path = std::env::var("KODAMA_STORAGE_PATH")
             .map(PathBuf::from)

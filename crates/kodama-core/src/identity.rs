@@ -52,6 +52,11 @@ impl KeyPair {
             }
         }
         std::fs::write(path, self.secret.to_bytes())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(())
     }
 

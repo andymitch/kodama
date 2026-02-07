@@ -5,6 +5,33 @@
 //! Serialization uses MessagePack via rmp-serde.
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// A string wrapper that redacts its contents in Debug output.
+///
+/// Use for sensitive values (passwords, tokens) that should not appear in logs.
+/// Serializes/deserializes transparently as a plain string.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RedactedString(pub String);
+
+impl fmt::Debug for RedactedString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\"***\"")
+    }
+}
+
+impl From<String> for RedactedString {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for RedactedString {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
 
 /// Maximum command message size (1 MB)
 pub const MAX_COMMAND_SIZE: usize = 1024 * 1024;
@@ -45,8 +72,6 @@ pub enum Command {
     UpdateFirmware(UpdateFirmwareParams),
     /// Network management (WiFi, etc.)
     Network(NetworkParams),
-    /// Execute a shell command (sandboxed)
-    Shell(ShellParams),
     /// List recordings on camera
     ListRecordings,
     /// Delete a recording
@@ -68,8 +93,6 @@ pub enum CommandResult {
     Status(CameraStatus),
     /// List of recordings
     RecordingsList(Vec<RecordingInfo>),
-    /// Shell command output
-    ShellOutput(ShellOutput),
 }
 
 /// Camera status information
@@ -147,28 +170,11 @@ pub enum NetworkAction {
     /// List available WiFi networks
     ScanWifi,
     /// Connect to a WiFi network
-    ConnectWifi { ssid: String, password: String },
+    ConnectWifi { ssid: String, password: RedactedString },
     /// Disconnect from WiFi
     DisconnectWifi,
     /// Get current network info
     GetStatus,
-}
-
-/// Parameters for shell command execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShellParams {
-    /// Command to execute
-    pub command: String,
-    /// Timeout in seconds
-    pub timeout_secs: Option<u32>,
-}
-
-/// Shell command output
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShellOutput {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
 }
 
 /// Parameters for deleting a recording

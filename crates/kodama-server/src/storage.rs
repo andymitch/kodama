@@ -222,7 +222,7 @@ mod tests {
     use bytes::Bytes;
     use tempfile::tempdir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_storage_manager_basic() {
         let dir = tempdir().unwrap();
         let local_config = LocalStorageConfig {
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(stats.frames_stored, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_storage_manager_keyframes_only() {
         let dir = tempdir().unwrap();
         let local_config = LocalStorageConfig {

@@ -84,9 +84,11 @@ fn process_frame(
                 let width = result.width.unwrap_or(640);
                 let height = result.height.unwrap_or(480);
                 tracing::info!("Emitting video-init: {}x{} codec={} init_size={}", width, height, codec, init.len());
-                // Dump init segment for debugging
-                if let Err(e) = std::fs::write("/tmp/kodama_init_debug.mp4", &init) {
-                    tracing::warn!("Failed to dump init segment: {}", e);
+                #[cfg(debug_assertions)]
+                {
+                    if let Err(e) = std::fs::write("/tmp/kodama_init_debug.mp4", &init) {
+                        tracing::warn!("Failed to dump init segment: {}", e);
+                    }
                 }
                 let _ = app.emit("video-init", VideoInitEvent {
                     source_id: source_id.clone(),
@@ -101,15 +103,17 @@ fn process_frame(
             }
 
             if let Some(ref segment) = result.media_segment {
-                tracing::info!("Emitting video-segment: source={}, size={}", source_id, segment.len());
+                tracing::trace!("Emitting video-segment: source={}, size={}", source_id, segment.len());
 
-                // Debug: dump first media segment
-                static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-                if !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    if let Err(e) = std::fs::write("/tmp/kodama_media_segment.m4s", segment) {
-                        tracing::warn!("Failed to dump media segment: {}", e);
-                    } else {
-                        tracing::info!("Dumped first media segment to /tmp/kodama_media_segment.m4s");
+                #[cfg(debug_assertions)]
+                {
+                    static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    if !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        if let Err(e) = std::fs::write("/tmp/kodama_media_segment.m4s", segment) {
+                            tracing::warn!("Failed to dump media segment: {}", e);
+                        } else {
+                            tracing::info!("Dumped first media segment to /tmp/kodama_media_segment.m4s");
+                        }
                     }
                 }
 
@@ -189,6 +193,9 @@ fn process_frame(
                     motion_level: state.motion_level,
                 });
             }
+        }
+        Channel::Unknown(_) => {
+            // Silently ignore unknown channel types
         }
     }
 }

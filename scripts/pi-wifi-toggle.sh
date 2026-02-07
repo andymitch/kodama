@@ -16,7 +16,7 @@ DURATION="${1:-60}"
 PI_HOST="${2:-10.0.0.229}"
 PI_USER="${3:-yurei}"
 PI_PASSWORD="${4:-password}"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
 WIFI_CONN="netplan-wlan0-mitchellhaus"
 LOG="/tmp/wifi-toggle.log"

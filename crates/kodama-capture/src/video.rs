@@ -225,7 +225,7 @@ impl VideoCapture {
                         );
                     }
 
-                    if tx.blocking_send(Bytes::copy_from_slice(&buf[..n])).is_err() {
+                    if tx.blocking_send(Bytes::from(buf[..n].to_vec())).is_err() {
                         info!("Video receiver dropped, stopping capture");
                         break;
                     }

@@ -172,6 +172,7 @@ impl Drop for Fmp4Muxer {
     fn drop(&mut self) {
         if let Some(mut child) = self.ffmpeg.take() {
             let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }

@@ -82,7 +82,7 @@ sshpass -p "password" ssh yurei@10.0.0.229
 
 # Cross-compile and deploy manually
 cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera
-sshpass -p "password" scp -o StrictHostKeyChecking=no \
+sshpass -p "password" scp -o StrictHostKeyChecking=accept-new \
   target/aarch64-unknown-linux-gnu/release/kodama-camera \
   yurei@10.0.0.229:~/kodama/
 
@@ -128,8 +128,8 @@ Camera (capture → Frame) → Iroh QUIC → Server (Router → broadcast) → C
                                         StorageBackend
 ```
 
-### Frame Format (22-byte header)
-`[source_id: 8][channel: 1][flags: 1][timestamp: 8][length: 4][payload: var]`
+### Frame Format (18-byte header + 4-byte length prefix)
+`4-byte length prefix on wire | [source_id: 8][channel: 1][flags: 1][timestamp: 8][payload: var]`
 
 Channels: Video(0), Audio(1), Telemetry(2). Flags include KEYFRAME (0x01).
 
@@ -148,7 +148,7 @@ Key variables (all prefixed `KODAMA_`):
 - `KODAMA_SERVER_KEY` - Server's base32 public key (required for camera/client)
 - `KODAMA_KEY_PATH` - Path to keypair file (default: ./camera.key or ./server.key)
 - `KODAMA_STORAGE_PATH` - Recording location
-- `KODAMA_BUFFER_SIZE` - Broadcast buffer capacity (default: 64)
+- `KODAMA_BUFFER_SIZE` - Broadcast buffer capacity (default: 512)
 - `RUST_LOG` - Tracing filter (e.g., `kodama=debug`)
 
 ## Key Patterns

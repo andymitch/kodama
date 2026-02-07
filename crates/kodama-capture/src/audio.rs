@@ -60,7 +60,6 @@ impl AudioCaptureConfig {
 /// Handle to a running audio capture
 pub struct AudioCapture {
     child: Option<Child>,
-    shutdown_tx: Option<mpsc::Sender<()>>,
     config: AudioCaptureConfig,
 }
 
@@ -76,7 +75,6 @@ impl AudioCapture {
     /// Start capture using arecord (Linux ALSA)
     fn start_arecord(config: AudioCaptureConfig) -> Result<(Self, mpsc::Receiver<Bytes>)> {
         let (tx, rx) = mpsc::channel(32);
-        let (shutdown_tx, _shutdown_rx) = mpsc::channel::<()>(1);
 
         let format = match config.bits_per_sample {
             16 => "S16_LE",
@@ -130,7 +128,6 @@ impl AudioCapture {
         Ok((
             Self {
                 child: Some(child),
-                shutdown_tx: Some(shutdown_tx),
                 config,
             },
             rx,
@@ -162,7 +159,7 @@ impl AudioCapture {
                         );
                     }
 
-                    if tx.blocking_send(Bytes::copy_from_slice(&buf)).is_err() {
+                    if tx.blocking_send(Bytes::from(buf.clone())).is_err() {
                         info!("Audio receiver dropped, stopping capture");
                         break;
                     }
@@ -191,7 +188,6 @@ impl AudioCapture {
 
     /// Stop capture and clean up
     pub fn stop(&mut self) {
-        self.shutdown_tx.take();
         if let Some(mut child) = self.child.take() {
             info!("Stopping audio capture");
             let _ = child.kill();

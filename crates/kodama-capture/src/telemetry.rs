@@ -418,47 +418,61 @@ impl TelemetryCapture {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        match collect_telemetry(&config, &mut prev_cpu_stats) {
-                            Ok(mut data) => {
-                                // Read GPS if available
-                                if let Some(ref mut reader) = gps_reader {
-                                    data.gps = reader.latest_fix().await;
-                                }
-
-                                // Read motion level if available
-                                if let Some(ref ml) = motion_level {
-                                    let bits = ml.load(Ordering::Relaxed);
-                                    data.motion_level = Some(f32::from_bits(bits));
-                                }
-
-                                let is_heartbeat = last_heartbeat.elapsed() >= Duration::from_secs(heartbeat_secs as u64);
-
-                                let sparse = if is_heartbeat || last_sent.is_none() {
-                                    Some(SparseTelemetry::from_full(&data))
-                                } else {
-                                    SparseTelemetry::diff(&data, last_sent.as_ref().unwrap(), &thresholds)
-                                };
-
-                                if let Some(payload) = sparse {
-                                    match payload.to_bytes() {
-                                        Ok(bytes) => {
-                                            if tx.send(bytes).await.is_err() {
-                                                debug!("Telemetry receiver dropped");
-                                                break;
-                                            }
-                                            if is_heartbeat || last_sent.is_none() {
-                                                last_heartbeat = Instant::now();
-                                            }
-                                            last_sent = Some(data);
+                        let config_clone = config.clone();
+                        let prev = prev_cpu_stats.take();
+                        match tokio::task::spawn_blocking(move || {
+                            let mut prev = prev;
+                            let result = collect_telemetry(&config_clone, &mut prev);
+                            (result, prev)
+                        }).await {
+                            Ok((result, prev)) => {
+                                prev_cpu_stats = prev;
+                                match result {
+                                    Ok(mut data) => {
+                                        // Read GPS if available
+                                        if let Some(ref mut reader) = gps_reader {
+                                            data.gps = reader.latest_fix().await;
                                         }
-                                        Err(e) => {
-                                            warn!("Failed to encode telemetry: {}", e);
+
+                                        // Read motion level if available
+                                        if let Some(ref ml) = motion_level {
+                                            let bits = ml.load(Ordering::Relaxed);
+                                            data.motion_level = Some(f32::from_bits(bits));
                                         }
+
+                                        let is_heartbeat = last_heartbeat.elapsed() >= Duration::from_secs(heartbeat_secs as u64);
+
+                                        let sparse = if is_heartbeat || last_sent.is_none() {
+                                            Some(SparseTelemetry::from_full(&data))
+                                        } else {
+                                            SparseTelemetry::diff(&data, last_sent.as_ref().unwrap(), &thresholds)
+                                        };
+
+                                        if let Some(payload) = sparse {
+                                            match payload.to_bytes() {
+                                                Ok(bytes) => {
+                                                    if tx.send(bytes).await.is_err() {
+                                                        debug!("Telemetry receiver dropped");
+                                                        break;
+                                                    }
+                                                    if is_heartbeat || last_sent.is_none() {
+                                                        last_heartbeat = Instant::now();
+                                                    }
+                                                    last_sent = Some(data);
+                                                }
+                                                Err(e) => {
+                                                    warn!("Failed to encode telemetry: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to collect telemetry: {}", e);
                                     }
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to collect telemetry: {}", e);
+                                warn!("spawn_blocking for telemetry failed: {}", e);
                             }
                         }
                     }
@@ -640,22 +654,17 @@ fn parse_meminfo_value(line: &str) -> Result<u64> {
 
 /// Read disk usage using statvfs
 fn read_disk_usage(path: &str) -> Result<(u64, u64)> {
-    // Use df command as a fallback since statvfs requires libc
-    let output = std::process::Command::new("df")
-        .args(["-B1", path])
-        .output()
-        .context("Failed to run df")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.lines().nth(1).context("No df output")?;
-    let parts: Vec<&str> = line.split_whitespace().collect();
-
-    if parts.len() >= 4 {
-        let total: u64 = parts[1].parse().unwrap_or(0);
-        let used: u64 = parts[2].parse().unwrap_or(0);
+    use std::ffi::CString;
+    let c_path = CString::new(path).context("Invalid path")?;
+    unsafe {
+        let mut stat: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+            anyhow::bail!("statvfs failed: {}", std::io::Error::last_os_error());
+        }
+        let total = stat.f_blocks as u64 * stat.f_frsize as u64;
+        let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+        let used = total - available;
         Ok((used, total))
-    } else {
-        anyhow::bail!("Invalid df output")
     }
 }
 

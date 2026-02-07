@@ -2499,6 +2499,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "libc",
  "rmp-serde",
  "serde",
  "serde_json",
@@ -2627,6 +2628,7 @@ dependencies = [
  "bytes",
  "kodama-core",
  "kodama-relay",
+ "libc",
  "tempfile",
  "tokio",
  "tracing",

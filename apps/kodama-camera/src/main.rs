@@ -31,7 +31,7 @@ use kodama_core::{
     Frame, SourceId,
     Command, CommandMessage, CommandResponse, CommandResult, CameraStatus,
     ConfigureParams, RecordParams, UpdateFirmwareParams, NetworkParams, NetworkAction,
-    ShellParams, ShellOutput, DeleteRecordingParams, SendRecordingParams, StreamParams,
+    DeleteRecordingParams, SendRecordingParams, StreamParams,
 };
 use kodama_relay::{Relay, CommandStream};
 use kodama_capture::{
@@ -598,9 +598,6 @@ async fn execute_command(command: Command) -> CommandResult {
         Command::Network(params) => {
             execute_network(params).await
         }
-        Command::Shell(params) => {
-            execute_shell(params).await
-        }
         Command::ListRecordings => {
             execute_list_recordings().await
         }
@@ -666,40 +663,6 @@ async fn execute_network(params: NetworkParams) -> CommandResult {
                 Ok(_info) => CommandResult::Ok,
                 Err(e) => CommandResult::Error(format!("Failed to get network status: {}", e)),
             }
-        }
-    }
-}
-
-/// Handle Shell command — execute with timeout
-async fn execute_shell(params: ShellParams) -> CommandResult {
-    let timeout_secs = params.timeout_secs.unwrap_or(30);
-    info!("Shell command: '{}' (timeout={}s)", params.command, timeout_secs);
-
-    let result = tokio::time::timeout(
-        Duration::from_secs(timeout_secs as u64),
-        tokio::process::Command::new("sh")
-            .args(["-c", &params.command])
-            .output(),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let exit_code = output.status.code().unwrap_or(-1);
-            info!("Shell command exited with code {}", exit_code);
-            CommandResult::ShellOutput(ShellOutput {
-                stdout,
-                stderr,
-                exit_code,
-            })
-        }
-        Ok(Err(e)) => {
-            CommandResult::Error(format!("Shell execution failed: {}", e))
-        }
-        Err(_) => {
-            CommandResult::Error(format!("Shell command timed out after {}s", timeout_secs))
         }
     }
 }

@@ -118,6 +118,9 @@ impl NalUnit {
     }
 }
 
+/// Maximum NAL parser buffer size (2 MB) to prevent unbounded memory growth
+const MAX_NAL_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+
 /// Parser for splitting H.264 byte streams into NAL units
 ///
 /// Handles both Annex B format (start codes: 0x000001 or 0x00000001)
@@ -136,6 +139,11 @@ impl NalParser {
     /// Feed data into the parser and extract complete NAL units
     pub fn feed(&mut self, data: &[u8]) -> Vec<NalUnit> {
         self.buffer.extend_from_slice(data);
+        if self.buffer.len() > MAX_NAL_BUFFER_SIZE {
+            tracing::warn!("NAL parser buffer exceeded {} bytes, resetting", MAX_NAL_BUFFER_SIZE);
+            self.buffer.clear();
+            return Vec::new();
+        }
         self.extract_nals()
     }
 
@@ -170,8 +178,7 @@ impl NalParser {
             let _ = self.buffer.split_to(nal_start); // Remove start code
             let nal_data = self.buffer.split_to(nal_end - nal_start);
 
-            // Remove trailing zeros (emulation prevention)
-            let nal_bytes = Bytes::copy_from_slice(&nal_data);
+            let nal_bytes = nal_data.freeze();
             if let Some(nal) = NalUnit::parse(nal_bytes) {
                 nals.push(nal);
             }

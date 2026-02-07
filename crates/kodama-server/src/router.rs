@@ -4,7 +4,7 @@ use anyhow::Result;
 use iroh::PublicKey;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::{broadcast, oneshot, RwLock};
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
@@ -27,13 +27,49 @@ pub enum PeerRole {
     Client,
 }
 
-/// Statistics about router state
+/// Statistics about router state (returned as a snapshot from atomic counters)
 #[derive(Debug, Clone, Default)]
 pub struct RouterStats {
     pub cameras_connected: usize,
     pub clients_connected: usize,
     pub frames_received: u64,
     pub frames_broadcast: u64,
+}
+
+/// Internal atomic counters for lock-free stats tracking
+struct AtomicRouterStats {
+    frames_received: AtomicU64,
+    frames_broadcast: AtomicU64,
+    cameras_connected: AtomicUsize,
+    clients_connected: AtomicUsize,
+}
+
+impl AtomicRouterStats {
+    fn new() -> Self {
+        Self {
+            frames_received: AtomicU64::new(0),
+            frames_broadcast: AtomicU64::new(0),
+            cameras_connected: AtomicUsize::new(0),
+            clients_connected: AtomicUsize::new(0),
+        }
+    }
+
+    /// Read all atomics and return a plain RouterStats snapshot
+    fn snapshot(&self) -> RouterStats {
+        RouterStats {
+            frames_received: self.frames_received.load(Ordering::Relaxed),
+            frames_broadcast: self.frames_broadcast.load(Ordering::Relaxed),
+            cameras_connected: self.cameras_connected.load(Ordering::Relaxed),
+            clients_connected: self.clients_connected.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Info about a connected peer, including a generation counter for race-condition protection
+#[derive(Debug, Clone)]
+struct PeerInfo {
+    role: PeerRole,
+    generation: u64,
 }
 
 /// Handle to the router for getting stats and managing peers
@@ -45,10 +81,12 @@ pub struct RouterHandle {
 struct RouterInner {
     /// Broadcast sender for distributing frames to clients
     frame_tx: broadcast::Sender<Frame>,
-    /// Connected peers and their roles
-    peers: RwLock<HashMap<PublicKey, PeerRole>>,
-    /// Stats
-    stats: RwLock<RouterStats>,
+    /// Connected peers and their roles (protected by RwLock since it's a HashMap)
+    peers: RwLock<HashMap<PublicKey, PeerInfo>>,
+    /// Lock-free atomic stats
+    stats: AtomicRouterStats,
+    /// Monotonically increasing generation counter for peer registration
+    connection_generation: AtomicU64,
     /// Command channels to cameras (keyed by camera PublicKey)
     camera_commands: RwLock<HashMap<PublicKey, Arc<CameraCommandState>>>,
 }
@@ -63,7 +101,7 @@ struct CameraCommandState {
 impl RouterHandle {
     /// Get current router statistics
     pub async fn stats(&self) -> RouterStats {
-        self.inner.stats.read().await.clone()
+        self.inner.stats.snapshot()
     }
 
     /// Get list of connected peers
@@ -73,7 +111,7 @@ impl RouterHandle {
             .read()
             .await
             .iter()
-            .map(|(k, v)| (*k, *v))
+            .map(|(k, v)| (*k, v.role))
             .collect()
     }
 
@@ -108,7 +146,8 @@ impl Router {
             inner: Arc::new(RouterInner {
                 frame_tx,
                 peers: RwLock::new(HashMap::new()),
-                stats: RwLock::new(RouterStats::default()),
+                stats: AtomicRouterStats::new(),
+                connection_generation: AtomicU64::new(0),
                 camera_commands: RwLock::new(HashMap::new()),
             }),
         }
@@ -121,48 +160,61 @@ impl Router {
         }
     }
 
-    /// Register a peer with a specific role
-    async fn register_peer(&self, key: PublicKey, role: PeerRole) {
+    /// Register a peer with a specific role.
+    ///
+    /// Returns a generation counter that must be passed to `unregister_peer`
+    /// to prevent stale connection handlers from removing newer registrations.
+    async fn register_peer(&self, key: PublicKey, role: PeerRole) -> u64 {
+        let gen = self.inner.connection_generation.fetch_add(1, Ordering::Relaxed);
         let mut peers = self.inner.peers.write().await;
-        let mut stats = self.inner.stats.write().await;
 
-        if peers.insert(key, role).is_none() {
+        let old = peers.insert(key, PeerInfo { role, generation: gen });
+        if old.is_none() {
             match role {
-                PeerRole::Camera => stats.cameras_connected += 1,
-                PeerRole::Client => stats.clients_connected += 1,
+                PeerRole::Camera => { self.inner.stats.cameras_connected.fetch_add(1, Ordering::Relaxed); }
+                PeerRole::Client => { self.inner.stats.clients_connected.fetch_add(1, Ordering::Relaxed); }
             }
         }
 
-        info!(?role, peer = %key, "Peer registered");
+        info!(?role, peer = %key, generation = gen, "Peer registered");
+        gen
     }
 
-    /// Unregister a peer
-    async fn unregister_peer(&self, key: PublicKey) {
+    /// Unregister a peer, but only if the generation matches.
+    ///
+    /// This prevents a stale connection handler (from a previous connection)
+    /// from removing a newer registration when a peer reconnects quickly.
+    async fn unregister_peer(&self, key: PublicKey, generation: u64) {
         let mut peers = self.inner.peers.write().await;
-        let mut stats = self.inner.stats.write().await;
 
-        if let Some(role) = peers.remove(&key) {
-            match role {
-                PeerRole::Camera => stats.cameras_connected = stats.cameras_connected.saturating_sub(1),
-                PeerRole::Client => stats.clients_connected = stats.clients_connected.saturating_sub(1),
+        if let Some(info) = peers.get(&key) {
+            if info.generation == generation {
+                let role = info.role;
+                peers.remove(&key);
+                match role {
+                    PeerRole::Camera => { self.inner.stats.cameras_connected.fetch_sub(1, Ordering::Relaxed); }
+                    PeerRole::Client => { self.inner.stats.clients_connected.fetch_sub(1, Ordering::Relaxed); }
+                }
+                info!(?role, peer = %key, generation, "Peer unregistered");
+            } else {
+                debug!(
+                    peer = %key,
+                    registered_generation = info.generation,
+                    stale_generation = generation,
+                    "Skipping unregister: generation mismatch (newer connection exists)"
+                );
             }
-            info!(?role, peer = %key, "Peer unregistered");
         }
     }
 
     /// Broadcast a frame to all subscribers
     pub async fn broadcast_frame(&self, frame: Frame) {
-        // Update stats
-        {
-            let mut stats = self.inner.stats.write().await;
-            stats.frames_received += 1;
-        }
+        self.inner.stats.frames_received.fetch_add(1, Ordering::Relaxed);
 
         // Broadcast to all subscribers
         match self.inner.frame_tx.send(frame) {
             Ok(n) => {
-                let mut stats = self.inner.stats.write().await;
-                stats.frames_broadcast += 1;
+                self.inner.stats.frames_broadcast.fetch_add(1, Ordering::Relaxed);
                 debug!(subscribers = n, "Frame broadcast");
             }
             Err(_) => {
@@ -181,7 +233,7 @@ impl Router {
         remote: PublicKey,
         receiver: FrameReceiver,
     ) -> Result<()> {
-        self.register_peer(remote, PeerRole::Camera).await;
+        let generation = self.register_peer(remote, PeerRole::Camera).await;
         info!(camera = %remote, "Camera stream opened");
 
         // Receive frames and broadcast
@@ -207,14 +259,14 @@ impl Router {
             }
         }
 
-        self.unregister_peer(remote).await;
+        self.unregister_peer(remote, generation).await;
         Ok(())
     }
 
     /// Handle a camera connection - receive frames and broadcast them
     pub async fn handle_camera(&self, conn: RelayConnection) -> Result<()> {
         let remote = conn.remote_public_key();
-        self.register_peer(remote, PeerRole::Camera).await;
+        let generation = self.register_peer(remote, PeerRole::Camera).await;
 
         // Accept the frame stream from the camera
         let receiver = conn.accept_frame_stream().await?;
@@ -243,14 +295,14 @@ impl Router {
             }
         }
 
-        self.unregister_peer(remote).await;
+        self.unregister_peer(remote, generation).await;
         Ok(())
     }
 
     /// Handle a client connection - subscribe to frames and forward them
     pub async fn handle_client(&self, conn: RelayConnection) -> Result<()> {
         let remote = conn.remote_public_key();
-        self.register_peer(remote, PeerRole::Client).await;
+        let generation = self.register_peer(remote, PeerRole::Client).await;
 
         // Subscribe to frames
         let mut rx = self.inner.frame_tx.subscribe();
@@ -279,7 +331,7 @@ impl Router {
             }
         }
 
-        self.unregister_peer(remote).await;
+        self.unregister_peer(remote, generation).await;
         Ok(())
     }
 

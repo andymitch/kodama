@@ -20,7 +20,7 @@ PI_HOST="${1:-10.0.0.229}"
 PI_USER="${2:-yurei}"
 PI_PASSWORD="${3:-password}"
 PI_DEPLOY_DIR="/home/${PI_USER}/kodama"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
 echo "=== Kodama Pi Camera Setup ==="
 echo "  Host: ${PI_HOST}"

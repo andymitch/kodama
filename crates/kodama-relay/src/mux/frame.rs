@@ -24,7 +24,7 @@ pub fn frame_to_bytes(frame: &Frame) -> Bytes {
 
     // Header
     buf.put_slice(frame.source.as_bytes());
-    buf.put_u8(frame.channel as u8);
+    buf.put_u8(frame.channel.as_u8());
     buf.put_u8(frame.flags.0);
     buf.put_u64(frame.timestamp_us);
 
@@ -49,8 +49,7 @@ pub fn frame_from_bytes(mut buf: Bytes) -> Result<Frame> {
     buf.copy_to_slice(&mut source_bytes);
     let source = SourceId::new(source_bytes);
 
-    let channel = Channel::try_from(buf.get_u8())
-        .map_err(|_| anyhow::anyhow!("Unknown channel type"))?;
+    let channel = Channel::from(buf.get_u8());
 
     let flags = FrameFlags(buf.get_u8());
     let timestamp_us = buf.get_u64();
@@ -69,15 +68,15 @@ pub fn frame_from_bytes(mut buf: Bytes) -> Result<Frame> {
 
 /// Write a frame to an async writer (prepends length prefix)
 pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -> Result<()> {
-    let bytes = frame_to_bytes(frame);
-
-    if bytes.len() > MAX_FRAME_PAYLOAD_SIZE {
+    if frame.payload.len() > MAX_FRAME_PAYLOAD_SIZE {
         anyhow::bail!(
-            "Frame too large: {} > {}",
-            bytes.len(),
+            "Frame payload too large: {} > {}",
+            frame.payload.len(),
             MAX_FRAME_PAYLOAD_SIZE
         );
     }
+
+    let bytes = frame_to_bytes(frame);
 
     // Write length prefix
     writer.write_all(&(bytes.len() as u32).to_be_bytes()).await?;

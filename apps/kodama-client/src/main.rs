@@ -30,7 +30,7 @@ use kodama_core::{
     Channel, Frame, SourceId,
     Command, ClientCommandMessage, TargetedCommandRequest, CommandResult,
     ConfigureParams, RecordParams, UpdateFirmwareParams, NetworkParams, NetworkAction,
-    ShellParams, DeleteRecordingParams, SendRecordingParams, StreamParams,
+    DeleteRecordingParams, SendRecordingParams, StreamParams,
 };
 use kodama_relay::Relay;
 use kodama_capture::{decode_telemetry, SparseTelemetry};
@@ -107,10 +107,11 @@ impl FrameSaver {
     }
 
     fn save(&mut self, frame: &Frame) -> Result<()> {
-        let channel_name = match frame.channel {
-            Channel::Video => "video",
-            Channel::Audio => "audio",
-            Channel::Telemetry => "telemetry",
+        let channel_name: std::borrow::Cow<'static, str> = match frame.channel {
+            Channel::Video => "video".into(),
+            Channel::Audio => "audio".into(),
+            Channel::Telemetry => "telemetry".into(),
+            Channel::Unknown(v) => format!("unknown_{}", v).into(),
         };
 
         let filename = format!(
@@ -229,6 +230,9 @@ async fn main() -> Result<()> {
                         if let Ok(telemetry) = decode_telemetry(&frame.payload) {
                             stats.last_telemetry = Some(telemetry);
                         }
+                    }
+                    Channel::Unknown(_) => {
+                        // Silently ignore unknown channel types for stats
                     }
                 }
 
@@ -420,7 +424,6 @@ async fn send_command_and_exit(
 ///   network:scan                    → Network(ScanWifi)
 ///   network:status                  → Network(GetStatus)
 ///   network:disconnect              → Network(DisconnectWifi)
-///   shell:COMMAND                   → Shell { command: COMMAND }
 ///   list-recordings                 → ListRecordings
 ///   delete-recording:ID             → DeleteRecording
 ///   send-recording:ID,DEST          → SendRecording
@@ -486,15 +489,6 @@ fn parse_command(input: &str) -> Result<Command> {
             };
             Ok(Command::Network(NetworkParams { action }))
         }
-        "shell" => {
-            if args.is_empty() {
-                anyhow::bail!("Shell command required. Usage: shell:echo hello");
-            }
-            Ok(Command::Shell(ShellParams {
-                command: args.to_string(),
-                timeout_secs: Some(30),
-            }))
-        }
         "list-recordings" => Ok(Command::ListRecordings),
         "delete-recording" => {
             if args.is_empty() {
@@ -519,7 +513,7 @@ fn parse_command(input: &str) -> Result<Command> {
         _ => {
             anyhow::bail!(
                 "Unknown command: '{}'. Available: status, reboot, configure, record, \
-                 update-firmware, network, shell, list-recordings, delete-recording, \
+                 update-firmware, network, list-recordings, delete-recording, \
                  send-recording, stream",
                 name
             );
@@ -566,17 +560,6 @@ fn print_command_result(result: &CommandResult) {
                 for r in recordings {
                     println!("  {} | {}s | {} bytes | started {}", r.id, r.duration_secs, r.size_bytes, r.start_time);
                 }
-            }
-        }
-        CommandResult::ShellOutput(output) => {
-            if !output.stdout.is_empty() {
-                print!("{}", output.stdout);
-            }
-            if !output.stderr.is_empty() {
-                eprint!("{}", output.stderr);
-            }
-            if output.exit_code != 0 {
-                println!("(exit code: {})", output.exit_code);
             }
         }
     }

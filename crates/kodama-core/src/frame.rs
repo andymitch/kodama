@@ -18,6 +18,7 @@ impl SourceId {
 
     /// Generate from Iroh NodeId bytes (truncates to first 8 bytes)
     pub fn from_node_id_bytes(bytes: &[u8]) -> Self {
+        assert!(bytes.len() >= 8, "NodeId bytes must be at least 8 bytes, got {}", bytes.len());
         let mut id = [0u8; 8];
         id.copy_from_slice(&bytes[..8]);
         Self(id)
@@ -42,26 +43,39 @@ impl std::fmt::Display for SourceId {
 /// Channel types within a source.
 ///
 /// Each camera outputs multiple channels that are muxed by the relay layer.
+/// The `Unknown` variant provides forward compatibility: frames with
+/// unrecognized channel types are accepted and relayed without error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[repr(u8)]
 pub enum Channel {
     /// H.264 video frames
-    Video = 0,
+    Video,
     /// Opus audio packets
-    Audio = 1,
+    Audio,
     /// MessagePack-encoded telemetry (CPU, temp, etc.)
-    Telemetry = 2,
+    Telemetry,
+    /// Forward-compatible: silently accept unknown channel types
+    Unknown(u8),
 }
 
-impl TryFrom<u8> for Channel {
-    type Error = ();
+impl Channel {
+    /// Convert to the wire-format byte value.
+    pub fn as_u8(&self) -> u8 {
+        match self {
+            Channel::Video => 0,
+            Channel::Audio => 1,
+            Channel::Telemetry => 2,
+            Channel::Unknown(v) => *v,
+        }
+    }
+}
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+impl From<u8> for Channel {
+    fn from(value: u8) -> Self {
         match value {
-            0 => Ok(Channel::Video),
-            1 => Ok(Channel::Audio),
-            2 => Ok(Channel::Telemetry),
-            _ => Err(()),
+            0 => Channel::Video,
+            1 => Channel::Audio,
+            2 => Channel::Telemetry,
+            v => Channel::Unknown(v),
         }
     }
 }
@@ -171,10 +185,19 @@ mod tests {
 
     #[test]
     fn test_channel_conversion() {
-        assert_eq!(Channel::try_from(0), Ok(Channel::Video));
-        assert_eq!(Channel::try_from(1), Ok(Channel::Audio));
-        assert_eq!(Channel::try_from(2), Ok(Channel::Telemetry));
-        assert_eq!(Channel::try_from(3), Err(()));
+        assert_eq!(Channel::from(0), Channel::Video);
+        assert_eq!(Channel::from(1), Channel::Audio);
+        assert_eq!(Channel::from(2), Channel::Telemetry);
+        assert_eq!(Channel::from(3), Channel::Unknown(3));
+        assert_eq!(Channel::from(255), Channel::Unknown(255));
+    }
+
+    #[test]
+    fn test_channel_as_u8() {
+        assert_eq!(Channel::Video.as_u8(), 0);
+        assert_eq!(Channel::Audio.as_u8(), 1);
+        assert_eq!(Channel::Telemetry.as_u8(), 2);
+        assert_eq!(Channel::Unknown(42).as_u8(), 42);
     }
 
     #[test]

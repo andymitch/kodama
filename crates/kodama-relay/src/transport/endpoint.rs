@@ -34,6 +34,11 @@ impl KodamaEndpoint {
                     std::fs::create_dir_all(parent)?;
                 }
                 std::fs::write(path, key.to_bytes())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                }
                 info!("Generated new secret key at {}", path.display());
                 key
             }

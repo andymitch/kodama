@@ -95,27 +95,26 @@ impl LocalStorage {
         fs::create_dir_all(&config.root_path)
             .with_context(|| format!("Failed to create storage directory: {:?}", config.root_path))?;
 
+        // Scan existing files to rebuild index
+        let index = Self::rebuild_index_sync(&config)?;
+
         let storage = Self {
             config,
-            index: Arc::new(RwLock::new(StorageIndex::new())),
+            index: Arc::new(RwLock::new(index)),
             writers: Arc::new(RwLock::new(HashMap::new())),
         };
-
-        // Scan existing files to rebuild index
-        // This is done synchronously on startup
-        storage.rebuild_index_sync()?;
 
         Ok(storage)
     }
 
     /// Rebuild index from existing files
-    fn rebuild_index_sync(&self) -> Result<()> {
-        info!("Scanning storage directory: {:?}", self.config.root_path);
+    fn rebuild_index_sync(config: &LocalStorageConfig) -> Result<StorageIndex> {
+        info!("Scanning storage directory: {:?}", config.root_path);
 
         let mut index = StorageIndex::new();
 
         // Walk the directory structure: root/source_id/*.segment
-        if let Ok(entries) = fs::read_dir(&self.config.root_path) {
+        if let Ok(entries) = fs::read_dir(&config.root_path) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     // Parse source ID from directory name
@@ -125,7 +124,7 @@ impl LocalStorage {
                         if let Ok(segment_entries) = fs::read_dir(entry.path()) {
                             for seg_entry in segment_entries.flatten() {
                                 if seg_entry.path().extension().is_some_and(|ext| ext == "segment") {
-                                    if let Ok(seg_index) = self.read_segment_index(&seg_entry.path()) {
+                                    if let Ok(seg_index) = read_segment_index(&seg_entry.path()) {
                                         index.total_bytes += seg_index.size_bytes;
                                         segments.push(seg_index);
                                     }
@@ -143,31 +142,7 @@ impl LocalStorage {
 
         info!("Found {} sources, {} total bytes", index.segments.len(), index.total_bytes);
 
-        // We can't easily set the index here since we don't have async context
-        // The index will be set when first accessed
-        Ok(())
-    }
-
-    /// Read segment index from file header
-    fn read_segment_index(&self, path: &Path) -> Result<SegmentIndex> {
-        let metadata = fs::metadata(path)?;
-        let mut file = File::open(path)?;
-
-        // Read header: start_time (8) + end_time (8) + frame_count (4)
-        let mut header = [0u8; 20];
-        file.read_exact(&mut header)?;
-
-        let start_time_us = u64::from_le_bytes(header[0..8].try_into().unwrap());
-        let end_time_us = u64::from_le_bytes(header[8..16].try_into().unwrap());
-        let frame_count = u32::from_le_bytes(header[16..20].try_into().unwrap());
-
-        Ok(SegmentIndex {
-            path: path.to_path_buf(),
-            start_time_us,
-            end_time_us,
-            frame_count,
-            size_bytes: metadata.len(),
-        })
+        Ok(index)
     }
 
     /// Get the segment path for a given source and timestamp
@@ -235,6 +210,7 @@ impl LocalStorage {
         file.write_all(&writer.end_time_us.to_le_bytes())?;
         file.write_all(&writer.frame_count.to_le_bytes())?;
         file.flush()?;
+        file.sync_data()?;
 
         // Update index
         let mut index = self.index.write().await;
@@ -251,29 +227,6 @@ impl LocalStorage {
             .entry(source)
             .or_default()
             .push(seg_index);
-
-        Ok(())
-    }
-
-    /// Write a frame to the current segment
-    async fn write_frame_to_segment(&self, frame: &Frame) -> Result<()> {
-        self.get_or_create_writer(frame.source, frame.timestamp_us).await?;
-
-        let mut writers = self.writers.write().await;
-        let writer = writers.get_mut(&frame.source)
-            .context("Writer not found after creation")?;
-
-        // Serialize frame
-        let frame_bytes = frame_to_bytes(frame);
-        let len = frame_bytes.len() as u32;
-
-        // Write length prefix + frame
-        writer.file.write_all(&len.to_le_bytes())?;
-        writer.file.write_all(&frame_bytes)?;
-
-        writer.end_time_us = frame.timestamp_us;
-        writer.frame_count += 1;
-        writer.bytes_written += 4 + frame_bytes.len() as u64;
 
         Ok(())
     }
@@ -299,7 +252,28 @@ impl LocalStorage {
 #[async_trait::async_trait]
 impl StorageBackend for LocalStorage {
     async fn store_frame(&self, frame: &Frame) -> Result<()> {
-        self.write_frame_to_segment(frame).await
+        self.get_or_create_writer(frame.source, frame.timestamp_us).await?;
+
+        let mut writers = self.writers.write().await;
+        let writer = writers.get_mut(&frame.source)
+            .context("Writer not found after creation")?;
+
+        // Serialize frame data in async context
+        let frame_bytes = frame_to_bytes(frame);
+        let len = frame_bytes.len() as u32;
+
+        // Perform the blocking file write via block_in_place
+        tokio::task::block_in_place(|| {
+            writer.file.write_all(&len.to_le_bytes())?;
+            writer.file.write_all(&frame_bytes)?;
+            Ok::<(), anyhow::Error>(())
+        })?;
+
+        writer.end_time_us = frame.timestamp_us;
+        writer.frame_count += 1;
+        writer.bytes_written += 4 + frame_bytes.len() as u64;
+
+        Ok(())
     }
 
     async fn get_frames(
@@ -390,23 +364,44 @@ impl StorageBackend for LocalStorage {
     }
 
     async fn available_bytes(&self) -> Result<Option<u64>> {
-        // Use df to check available space
-        let output = std::process::Command::new("df")
-            .args(["-B1", self.config.root_path.to_str().unwrap_or("/")])
-            .output()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(line) = stdout.lines().nth(1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                if let Ok(available) = parts[3].parse::<u64>() {
-                    return Ok(Some(available));
+        let path = self.config.root_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            use std::ffi::CString;
+            let c_path = CString::new(path.to_str().unwrap_or("/"))
+                .map_err(|e| anyhow::anyhow!("Invalid path: {}", e))?;
+            unsafe {
+                let mut stat: libc::statvfs = std::mem::zeroed();
+                if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+                    anyhow::bail!("statvfs failed: {}", std::io::Error::last_os_error());
                 }
+                let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+                Ok(Some(available))
             }
-        }
-
-        Ok(None)
+        }).await??;
+        Ok(result)
     }
+}
+
+/// Read segment index from file header
+fn read_segment_index(path: &Path) -> Result<SegmentIndex> {
+    let metadata = fs::metadata(path)?;
+    let mut file = File::open(path)?;
+
+    // Read header: start_time (8) + end_time (8) + frame_count (4)
+    let mut header = [0u8; 20];
+    file.read_exact(&mut header)?;
+
+    let start_time_us = u64::from_le_bytes(header[0..8].try_into().unwrap());
+    let end_time_us = u64::from_le_bytes(header[8..16].try_into().unwrap());
+    let frame_count = u32::from_le_bytes(header[16..20].try_into().unwrap());
+
+    Ok(SegmentIndex {
+        path: path.to_path_buf(),
+        start_time_us,
+        end_time_us,
+        frame_count,
+        size_bytes: metadata.len(),
+    })
 }
 
 /// Parse source ID from directory name (hex string)
@@ -432,7 +427,7 @@ mod tests {
     use kodama_core::{Channel, FrameFlags};
     use tempfile::tempdir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_local_storage_store_and_retrieve() {
         let dir = tempdir().unwrap();
         let config = LocalStorageConfig {
