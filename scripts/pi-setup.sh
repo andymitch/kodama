@@ -64,7 +64,7 @@ echo "  Created ${PI_DEPLOY_DIR}"
 echo ""
 echo "=== Step 2: Stop existing services ==="
 pi_ssh "sudo systemctl stop yurei 2>/dev/null || true"
-pi_ssh "sudo pkill -f kodama-camera 2>/dev/null || true"
+pi_ssh "sudo pkill -f '[k]odama-camera' 2>/dev/null || true"
 pi_ssh "sudo pkill -f '/usr/local/bin/yurei' 2>/dev/null || true"
 echo "  Stopped."
 

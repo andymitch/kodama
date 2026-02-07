@@ -19,7 +19,7 @@ cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera 2>&1 |
 
 echo "Stopping camera on Pi..."
 sshpass -p "${PI_PASSWORD}" ssh ${SSH_OPTS} "${PI_USER}@${PI_HOST}" \
-    "sudo pkill -f kodama-camera 2>/dev/null || true"
+    "sudo pkill -f '[k]odama-camera' 2>/dev/null || true"
 
 echo "Deploying to ${PI_USER}@${PI_HOST}:${PI_DEPLOY_DIR}/..."
 sshpass -p "${PI_PASSWORD}" scp ${SSH_OPTS} \
