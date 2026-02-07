@@ -15,12 +15,15 @@ use anyhow::Result;
 use iroh::endpoint::Connection;
 use iroh::PublicKey;
 use std::path::Path;
+use std::sync::Arc;
 
 use kodama_core::Frame;
 use mux::frame::{read_frame, write_frame};
 
 // Re-export key types
 pub use transport::{KodamaEndpoint, FrameSender, FrameReceiver, FrameStream};
+pub use transport::{CommandSender, CommandReceiver, CommandStream};
+pub use transport::{ClientCommandSender, ClientCommandReceiver, ClientCommandStream};
 pub use mux::{FrameBuffer, BackpressureSender, BufferStats, Demuxer};
 
 /// High-level relay interface for sending/receiving frames over Iroh
@@ -80,13 +83,27 @@ impl Relay {
 }
 
 /// A connection to a remote relay endpoint
+///
+/// Uses `Arc<Connection>` internally so it can be cloned cheaply
+/// (e.g. to use frame stream and command stream concurrently).
 pub struct RelayConnection {
-    conn: Connection,
+    conn: Arc<Connection>,
 }
 
 impl RelayConnection {
     pub(crate) fn new(conn: Connection) -> Self {
-        Self { conn }
+        Self { conn: Arc::new(conn) }
+    }
+
+    /// Create a cheap clone of this connection handle.
+    ///
+    /// Both handles share the same underlying QUIC connection.
+    /// Use this when you need to open multiple stream types concurrently
+    /// (e.g. frame stream + command stream).
+    pub fn clone_handle(&self) -> Self {
+        Self {
+            conn: Arc::clone(&self.conn),
+        }
     }
 
     /// Get the remote endpoint's public key
@@ -148,6 +165,36 @@ impl RelayConnection {
     pub async fn accept_bi_stream(&self) -> Result<FrameStream> {
         let (send, recv) = self.conn.accept_bi().await?;
         Ok(FrameStream::new(send, recv))
+    }
+
+    // ========== Command stream API ==========
+
+    /// Open a bidirectional command stream to a camera.
+    ///
+    /// The server opens this to the camera; the camera accepts it.
+    pub async fn open_command_stream(&self) -> Result<CommandStream> {
+        let (send, recv) = self.conn.open_bi().await?;
+        Ok(CommandStream::new(send, recv))
+    }
+
+    /// Accept a bidirectional command stream.
+    ///
+    /// The camera accepts this from the server.
+    pub async fn accept_command_stream(&self) -> Result<CommandStream> {
+        let (send, recv) = self.conn.accept_bi().await?;
+        Ok(CommandStream::new(send, recv))
+    }
+
+    /// Open a client command stream (for client <-> server communication).
+    pub async fn open_client_command_stream(&self) -> Result<ClientCommandStream> {
+        let (send, recv) = self.conn.open_bi().await?;
+        Ok(ClientCommandStream::new(send, recv))
+    }
+
+    /// Accept a client command stream.
+    pub async fn accept_client_command_stream(&self) -> Result<ClientCommandStream> {
+        let (send, recv) = self.conn.accept_bi().await?;
+        Ok(ClientCommandStream::new(send, recv))
     }
 
     // ========== Connection management ==========

@@ -67,10 +67,14 @@ impl VideoCaptureConfig {
     }
 }
 
-/// Handle to a running video capture process
+/// Handle to a running video capture process.
+///
+/// Holds the `mpsc::Sender` internally so the process can be restarted
+/// (e.g. for bitrate changes) without replacing the receiver.
 pub struct VideoCapture {
     child: Option<Child>,
     config: VideoCaptureConfig,
+    tx: mpsc::Sender<Bytes>,
 }
 
 impl VideoCapture {
@@ -79,13 +83,21 @@ impl VideoCapture {
     /// Returns a receiver for H.264 encoded video chunks.
     /// Each chunk may contain one or more NAL units.
     pub fn start(config: VideoCaptureConfig) -> Result<(Self, mpsc::Receiver<Bytes>)> {
-        Self::start_libcamera(config)
-    }
-
-    /// Start capture using libcamera-vid
-    fn start_libcamera(config: VideoCaptureConfig) -> Result<(Self, mpsc::Receiver<Bytes>)> {
         let (tx, rx) = mpsc::channel(config.fps as usize); // Buffer ~1 second
 
+        let mut capture = Self {
+            child: None,
+            config,
+            tx,
+        };
+        capture.start_process()?;
+
+        Ok((capture, rx))
+    }
+
+    /// Start (or restart) the rpicam-vid process.
+    fn start_process(&mut self) -> Result<()> {
+        let config = &self.config;
         let mut args = vec![
             "-t".to_string(),
             "0".to_string(), // Run indefinitely
@@ -125,8 +137,9 @@ impl VideoCapture {
         };
 
         info!(
-            "Starting {}: {}x{} @ {}fps",
-            cmd, config.width, config.height, config.fps
+            "Starting {}: {}x{} @ {}fps, bitrate={}",
+            cmd, config.width, config.height, config.fps,
+            if config.bitrate > 0 { format!("{} bps", config.bitrate) } else { "auto".to_string() },
         );
         debug!("{} args: {:?}", cmd, args);
 
@@ -142,19 +155,43 @@ impl VideoCapture {
             .take()
             .context(format!("Failed to capture stdout from {}", cmd))?;
 
-        // Spawn blocking reader task
-        let read_config = config.clone();
+        // Spawn blocking reader task (uses a clone of our sender)
+        let tx = self.tx.clone();
+        let read_config = self.config.clone();
         tokio::task::spawn_blocking(move || {
             Self::read_video_stream(stdout, tx, &read_config);
         });
 
-        Ok((
-            Self {
-                child: Some(child),
-                config,
-            },
-            rx,
-        ))
+        self.child = Some(child);
+        Ok(())
+    }
+
+    /// Stop the current capture process (if running).
+    fn stop_process(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            info!("Stopping video capture process");
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    /// Update the encoding bitrate by restarting rpicam-vid.
+    ///
+    /// The receiver sees a brief gap (~100-500ms) during restart, then new
+    /// frames arrive starting with a keyframe (guaranteed by `--inline`).
+    pub fn update_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
+        if self.config.bitrate == bitrate_bps {
+            debug!("ABR: bitrate unchanged at {} bps, skipping restart", bitrate_bps);
+            return Ok(());
+        }
+        info!(
+            "ABR: updating bitrate {} -> {} bps",
+            if self.config.bitrate > 0 { self.config.bitrate.to_string() } else { "auto".to_string() },
+            bitrate_bps,
+        );
+        self.stop_process();
+        self.config.bitrate = bitrate_bps;
+        self.start_process()
     }
 
     /// Read video stream from stdout and send chunks to channel
@@ -213,17 +250,13 @@ impl VideoCapture {
 
     /// Stop capture and clean up
     pub fn stop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            info!("Stopping video capture");
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.stop_process();
     }
 }
 
 impl Drop for VideoCapture {
     fn drop(&mut self) {
-        self.stop();
+        self.stop_process();
     }
 }
 
@@ -233,10 +266,6 @@ impl Drop for VideoCapture {
 pub struct TestSourceConfig {
     /// Frames per second
     pub fps: u32,
-    /// Simulated frame size in bytes (ignored - real H.264 sizes used)
-    pub frame_size: usize,
-    /// Simulate keyframes every N frames (ignored - real H.264 keyframe interval used)
-    pub keyframe_interval: u32,
 }
 
 #[cfg(feature = "test-source")]
@@ -244,8 +273,6 @@ impl Default for TestSourceConfig {
     fn default() -> Self {
         Self {
             fps: 30,
-            frame_size: 15000,
-            keyframe_interval: 30,
         }
     }
 }

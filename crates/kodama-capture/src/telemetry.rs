@@ -1,7 +1,8 @@
 //! Telemetry capture module
 //!
 //! Collects system metrics (CPU, temperature, disk usage, etc.),
-//! GPS position, and video motion level. Encodes as JSON for streaming.
+//! GPS position, and video motion level. Encodes as MessagePack with
+//! threshold-based sparse updates for efficient streaming.
 //! Works on Linux systems.
 
 use anyhow::{Context, Result};
@@ -13,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 /// GPS position data
@@ -76,11 +78,289 @@ impl Default for TelemetryData {
     }
 }
 
+/// Thresholds for sparse telemetry updates.
+/// A field is only sent when it changes by more than the threshold since the last sent value.
+#[derive(Debug, Clone)]
+pub struct TelemetryThresholds {
+    pub cpu_usage: f32,
+    pub cpu_temp: f32,
+    pub memory_usage: f32,
+    pub disk_usage: f32,
+    pub network_bytes: u64,
+    pub load_average: f32,
+    pub lat_lon: f64,
+    pub altitude: f64,
+    pub speed: f64,
+    pub heading: f64,
+    pub motion_level: f32,
+}
+
+impl Default for TelemetryThresholds {
+    fn default() -> Self {
+        Self {
+            cpu_usage: 5.0,
+            cpu_temp: 1.0,
+            memory_usage: 5.0,
+            disk_usage: 5.0,
+            network_bytes: 10_240,
+            load_average: 0.1,
+            lat_lon: 0.0001,
+            altitude: 5.0,
+            speed: 0.5,
+            heading: 5.0,
+            motion_level: 0.05,
+        }
+    }
+}
+
+/// Sparse GPS data with short field names for wire efficiency
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparseGps {
+    #[serde(rename = "la")]
+    pub latitude: f64,
+    #[serde(rename = "lo")]
+    pub longitude: f64,
+    #[serde(rename = "al", skip_serializing_if = "Option::is_none", default)]
+    pub altitude: Option<f64>,
+    #[serde(rename = "sp", skip_serializing_if = "Option::is_none", default)]
+    pub speed: Option<f64>,
+    #[serde(rename = "hd", skip_serializing_if = "Option::is_none", default)]
+    pub heading: Option<f64>,
+    #[serde(rename = "fm")]
+    pub fix_mode: u8,
+}
+
+/// Sparse telemetry payload with short field names and optional fields.
+/// Only changed values are included between full heartbeats.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparseTelemetry {
+    /// Whether this is a full heartbeat (all fields present)
+    #[serde(rename = "f", default)]
+    pub full: bool,
+    #[serde(rename = "cpu", skip_serializing_if = "Option::is_none", default)]
+    pub cpu_usage: Option<f32>,
+    #[serde(rename = "tmp", skip_serializing_if = "Option::is_none", default)]
+    pub cpu_temp: Option<f32>,
+    #[serde(rename = "mem", skip_serializing_if = "Option::is_none", default)]
+    pub memory_usage: Option<f32>,
+    #[serde(rename = "dsk", skip_serializing_if = "Option::is_none", default)]
+    pub disk_usage: Option<f32>,
+    #[serde(rename = "tx", skip_serializing_if = "Option::is_none", default)]
+    pub network_tx_bytes: Option<u64>,
+    #[serde(rename = "rx", skip_serializing_if = "Option::is_none", default)]
+    pub network_rx_bytes: Option<u64>,
+    #[serde(rename = "up", skip_serializing_if = "Option::is_none", default)]
+    pub uptime_secs: Option<u64>,
+    #[serde(rename = "la", skip_serializing_if = "Option::is_none", default)]
+    pub load_average: Option<[f32; 3]>,
+    #[serde(rename = "gps", skip_serializing_if = "Option::is_none", default)]
+    pub gps: Option<SparseGps>,
+    #[serde(rename = "mot", skip_serializing_if = "Option::is_none", default)]
+    pub motion_level: Option<f32>,
+}
+
+impl SparseTelemetry {
+    /// Create a full heartbeat payload with all fields set
+    pub fn from_full(data: &TelemetryData) -> Self {
+        Self {
+            full: true,
+            cpu_usage: Some(data.cpu_usage),
+            cpu_temp: data.cpu_temp,
+            memory_usage: Some(data.memory_usage),
+            disk_usage: Some(data.disk_usage),
+            network_tx_bytes: Some(data.network_tx_bytes),
+            network_rx_bytes: Some(data.network_rx_bytes),
+            uptime_secs: Some(data.uptime_secs),
+            load_average: Some(data.load_average),
+            gps: data.gps.as_ref().map(|g| SparseGps {
+                latitude: g.latitude,
+                longitude: g.longitude,
+                altitude: g.altitude,
+                speed: g.speed,
+                heading: g.heading,
+                fix_mode: g.fix_mode,
+            }),
+            motion_level: data.motion_level,
+        }
+    }
+
+    /// Create a diff payload containing only fields that exceed thresholds.
+    /// Returns `None` if nothing changed enough to warrant sending.
+    pub fn diff(
+        current: &TelemetryData,
+        previous: &TelemetryData,
+        thresholds: &TelemetryThresholds,
+    ) -> Option<Self> {
+        let mut sparse = Self {
+            full: false,
+            cpu_usage: None,
+            cpu_temp: None,
+            memory_usage: None,
+            disk_usage: None,
+            network_tx_bytes: None,
+            network_rx_bytes: None,
+            uptime_secs: None,
+            load_average: None,
+            gps: None,
+            motion_level: None,
+        };
+
+        let mut has_changes = false;
+
+        if (current.cpu_usage - previous.cpu_usage).abs() >= thresholds.cpu_usage {
+            sparse.cpu_usage = Some(current.cpu_usage);
+            has_changes = true;
+        }
+
+        match (current.cpu_temp, previous.cpu_temp) {
+            (Some(c), Some(p)) if (c - p).abs() >= thresholds.cpu_temp => {
+                sparse.cpu_temp = Some(c);
+                has_changes = true;
+            }
+            (Some(c), None) => {
+                sparse.cpu_temp = Some(c);
+                has_changes = true;
+            }
+            _ => {}
+        }
+
+        if (current.memory_usage - previous.memory_usage).abs() >= thresholds.memory_usage {
+            sparse.memory_usage = Some(current.memory_usage);
+            has_changes = true;
+        }
+
+        if (current.disk_usage - previous.disk_usage).abs() >= thresholds.disk_usage {
+            sparse.disk_usage = Some(current.disk_usage);
+            has_changes = true;
+        }
+
+        if current.network_tx_bytes.abs_diff(previous.network_tx_bytes) >= thresholds.network_bytes {
+            sparse.network_tx_bytes = Some(current.network_tx_bytes);
+            has_changes = true;
+        }
+
+        if current.network_rx_bytes.abs_diff(previous.network_rx_bytes) >= thresholds.network_bytes {
+            sparse.network_rx_bytes = Some(current.network_rx_bytes);
+            has_changes = true;
+        }
+
+        // Always send uptime (cheap, useful for liveness)
+        if current.uptime_secs != previous.uptime_secs {
+            sparse.uptime_secs = Some(current.uptime_secs);
+            has_changes = true;
+        }
+
+        let la_changed = current.load_average.iter()
+            .zip(previous.load_average.iter())
+            .any(|(c, p)| (c - p).abs() >= thresholds.load_average);
+        if la_changed {
+            sparse.load_average = Some(current.load_average);
+            has_changes = true;
+        }
+
+        // GPS diff
+        match (&current.gps, &previous.gps) {
+            (Some(cg), Some(pg)) => {
+                if (cg.latitude - pg.latitude).abs() >= thresholds.lat_lon
+                    || (cg.longitude - pg.longitude).abs() >= thresholds.lat_lon
+                    || opt_diff_f64(cg.altitude, pg.altitude, thresholds.altitude)
+                    || opt_diff_f64(cg.speed, pg.speed, thresholds.speed)
+                    || opt_diff_f64(cg.heading, pg.heading, thresholds.heading)
+                {
+                    sparse.gps = Some(SparseGps {
+                        latitude: cg.latitude,
+                        longitude: cg.longitude,
+                        altitude: cg.altitude,
+                        speed: cg.speed,
+                        heading: cg.heading,
+                        fix_mode: cg.fix_mode,
+                    });
+                    has_changes = true;
+                }
+            }
+            (Some(cg), None) => {
+                sparse.gps = Some(SparseGps {
+                    latitude: cg.latitude,
+                    longitude: cg.longitude,
+                    altitude: cg.altitude,
+                    speed: cg.speed,
+                    heading: cg.heading,
+                    fix_mode: cg.fix_mode,
+                });
+                has_changes = true;
+            }
+            _ => {}
+        }
+
+        match (current.motion_level, previous.motion_level) {
+            (Some(c), Some(p)) if (c - p).abs() >= thresholds.motion_level => {
+                sparse.motion_level = Some(c);
+                has_changes = true;
+            }
+            (Some(c), None) => {
+                sparse.motion_level = Some(c);
+                has_changes = true;
+            }
+            _ => {}
+        }
+
+        if has_changes { Some(sparse) } else { None }
+    }
+
+    /// Merge this sparse update into a full TelemetryData state
+    pub fn merge_into(&self, state: &mut TelemetryData) {
+        if let Some(v) = self.cpu_usage { state.cpu_usage = v; }
+        if let Some(v) = self.cpu_temp { state.cpu_temp = Some(v); }
+        if let Some(v) = self.memory_usage { state.memory_usage = v; }
+        if let Some(v) = self.disk_usage { state.disk_usage = v; }
+        if let Some(v) = self.network_tx_bytes { state.network_tx_bytes = v; }
+        if let Some(v) = self.network_rx_bytes { state.network_rx_bytes = v; }
+        if let Some(v) = self.uptime_secs { state.uptime_secs = v; }
+        if let Some(v) = self.load_average { state.load_average = v; }
+        if let Some(ref g) = self.gps {
+            state.gps = Some(GpsData {
+                latitude: g.latitude,
+                longitude: g.longitude,
+                altitude: g.altitude,
+                speed: g.speed,
+                heading: g.heading,
+                fix_mode: g.fix_mode,
+            });
+        }
+        if let Some(v) = self.motion_level { state.motion_level = Some(v); }
+    }
+
+    /// Serialize to msgpack bytes
+    pub fn to_bytes(&self) -> Result<Bytes> {
+        let data = rmp_serde::to_vec_named(self)
+            .context("Failed to serialize sparse telemetry")?;
+        Ok(Bytes::from(data))
+    }
+
+    /// Deserialize from msgpack bytes
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        rmp_serde::from_slice(data)
+            .context("Failed to deserialize sparse telemetry")
+    }
+}
+
+fn opt_diff_f64(a: Option<f64>, b: Option<f64>, threshold: f64) -> bool {
+    match (a, b) {
+        (Some(av), Some(bv)) => (av - bv).abs() >= threshold,
+        (Some(_), None) | (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
 /// Telemetry capture configuration
 #[derive(Debug, Clone)]
 pub struct TelemetryCaptureConfig {
     /// How often to collect telemetry (in seconds)
     pub interval_secs: u32,
+    /// How often to send a full heartbeat (in seconds)
+    pub heartbeat_interval_secs: u32,
+    /// Thresholds for sparse updates
+    pub thresholds: TelemetryThresholds,
     /// Network interface to monitor (None = sum all)
     pub network_interface: Option<String>,
     /// Disk path to monitor for usage
@@ -94,7 +374,9 @@ pub struct TelemetryCaptureConfig {
 impl Default for TelemetryCaptureConfig {
     fn default() -> Self {
         Self {
-            interval_secs: 5,
+            interval_secs: 1,
+            heartbeat_interval_secs: 30,
+            thresholds: TelemetryThresholds::default(),
             network_interface: None,
             disk_path: "/".to_string(),
             enable_gps: true,
@@ -111,12 +393,16 @@ pub struct TelemetryCapture {
 impl TelemetryCapture {
     /// Start telemetry collection
     ///
-    /// Returns a receiver for JSON-encoded telemetry packets.
+    /// Returns a receiver for msgpack-encoded sparse telemetry packets.
+    /// Sends full heartbeats every `heartbeat_interval_secs` and sparse
+    /// diffs (only changed fields) in between.
     pub fn start(config: TelemetryCaptureConfig) -> Result<(Self, mpsc::Receiver<Bytes>)> {
         let (tx, rx) = mpsc::channel(16);
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
 
         let motion_level = config.motion_level.clone();
+        let thresholds = config.thresholds.clone();
+        let heartbeat_secs = config.heartbeat_interval_secs;
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs as u64));
@@ -126,6 +412,8 @@ impl TelemetryCapture {
             } else {
                 None
             };
+            let mut last_sent: Option<TelemetryData> = None;
+            let mut last_heartbeat = Instant::now() - Duration::from_secs(heartbeat_secs as u64 + 1);
 
             loop {
                 tokio::select! {
@@ -143,15 +431,29 @@ impl TelemetryCapture {
                                     data.motion_level = Some(f32::from_bits(bits));
                                 }
 
-                                match encode_telemetry(&data) {
-                                    Ok(bytes) => {
-                                        if tx.send(bytes).await.is_err() {
-                                            debug!("Telemetry receiver dropped");
-                                            break;
+                                let is_heartbeat = last_heartbeat.elapsed() >= Duration::from_secs(heartbeat_secs as u64);
+
+                                let sparse = if is_heartbeat || last_sent.is_none() {
+                                    Some(SparseTelemetry::from_full(&data))
+                                } else {
+                                    SparseTelemetry::diff(&data, last_sent.as_ref().unwrap(), &thresholds)
+                                };
+
+                                if let Some(payload) = sparse {
+                                    match payload.to_bytes() {
+                                        Ok(bytes) => {
+                                            if tx.send(bytes).await.is_err() {
+                                                debug!("Telemetry receiver dropped");
+                                                break;
+                                            }
+                                            if is_heartbeat || last_sent.is_none() {
+                                                last_heartbeat = Instant::now();
+                                            }
+                                            last_sent = Some(data);
                                         }
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to encode telemetry: {}", e);
+                                        Err(e) => {
+                                            warn!("Failed to encode telemetry: {}", e);
+                                        }
                                     }
                                 }
                             }
@@ -427,17 +729,15 @@ fn read_load_average() -> Result<[f32; 3]> {
     }
 }
 
-/// Encode telemetry data to JSON bytes
+/// Encode full telemetry data to msgpack bytes
 pub fn encode_telemetry(data: &TelemetryData) -> Result<Bytes> {
-    let json = serde_json::to_vec(data)
-        .context("Failed to serialize telemetry")?;
-    Ok(Bytes::from(json))
+    let sparse = SparseTelemetry::from_full(data);
+    sparse.to_bytes()
 }
 
-/// Decode telemetry data from JSON bytes
-pub fn decode_telemetry(data: &[u8]) -> Result<TelemetryData> {
-    serde_json::from_slice(data)
-        .context("Failed to deserialize telemetry")
+/// Decode telemetry data from msgpack bytes (SparseTelemetry envelope)
+pub fn decode_telemetry(data: &[u8]) -> Result<SparseTelemetry> {
+    SparseTelemetry::from_bytes(data)
 }
 
 // --- GPS reader via gpsd JSON protocol ---
@@ -646,11 +946,12 @@ mod tests {
         let encoded = encode_telemetry(&data).unwrap();
         let decoded = decode_telemetry(&encoded).unwrap();
 
-        assert!((decoded.cpu_usage - 25.5).abs() < 0.01);
+        assert!(decoded.full);
+        assert!((decoded.cpu_usage.unwrap() - 25.5).abs() < 0.01);
         assert_eq!(decoded.cpu_temp, Some(45.0));
-        assert_eq!(decoded.uptime_secs, 3600);
-        assert_eq!(decoded.gps, None);
-        assert_eq!(decoded.motion_level, None);
+        assert_eq!(decoded.uptime_secs, Some(3600));
+        assert!(decoded.gps.is_none());
+        assert!(decoded.motion_level.is_none());
     }
 
     #[test]
@@ -679,12 +980,134 @@ mod tests {
     }
 
     #[test]
-    fn test_telemetry_backward_compatible_decode() {
-        // Old telemetry JSON without gps/motion_level should still decode
-        let old_json = r#"{"cpu_usage":10.0,"cpu_temp":null,"memory_usage":50.0,"disk_usage":30.0,"network_tx_bytes":0,"network_rx_bytes":0,"uptime_secs":100,"load_average":[0.1,0.2,0.3]}"#;
-        let decoded: TelemetryData = serde_json::from_str(old_json).unwrap();
-        assert_eq!(decoded.gps, None);
-        assert_eq!(decoded.motion_level, None);
+    fn test_sparse_telemetry_full() {
+        let data = TelemetryData {
+            cpu_usage: 50.0,
+            cpu_temp: Some(60.0),
+            memory_usage: 70.0,
+            disk_usage: 80.0,
+            network_tx_bytes: 100_000,
+            network_rx_bytes: 200_000,
+            uptime_secs: 7200,
+            load_average: [1.0, 2.0, 3.0],
+            gps: None,
+            motion_level: Some(0.3),
+        };
+
+        let sparse = SparseTelemetry::from_full(&data);
+        assert!(sparse.full);
+        assert_eq!(sparse.cpu_usage, Some(50.0));
+        assert_eq!(sparse.memory_usage, Some(70.0));
+        assert_eq!(sparse.motion_level, Some(0.3));
+
+        // Round-trip through msgpack
+        let bytes = sparse.to_bytes().unwrap();
+        let decoded = SparseTelemetry::from_bytes(&bytes).unwrap();
+        assert!(decoded.full);
+        assert!((decoded.cpu_usage.unwrap() - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_sparse_telemetry_diff() {
+        let thresholds = TelemetryThresholds::default();
+
+        let prev = TelemetryData {
+            cpu_usage: 50.0,
+            cpu_temp: Some(60.0),
+            memory_usage: 70.0,
+            disk_usage: 80.0,
+            network_tx_bytes: 100_000,
+            network_rx_bytes: 200_000,
+            uptime_secs: 7200,
+            load_average: [1.0, 2.0, 3.0],
+            gps: None,
+            motion_level: Some(0.3),
+        };
+
+        // CPU changed by 10% (above 5% threshold), memory by 1% (below 5%)
+        let current = TelemetryData {
+            cpu_usage: 60.0,
+            cpu_temp: Some(60.5), // below 1.0 threshold
+            memory_usage: 71.0, // below 5.0 threshold
+            disk_usage: 80.0,
+            network_tx_bytes: 100_500, // below 10KB threshold
+            network_rx_bytes: 200_000,
+            uptime_secs: 7201,
+            load_average: [1.0, 2.0, 3.0],
+            gps: None,
+            motion_level: Some(0.3),
+        };
+
+        let diff = SparseTelemetry::diff(&current, &prev, &thresholds).unwrap();
+        assert!(!diff.full);
+        assert_eq!(diff.cpu_usage, Some(60.0)); // changed
+        assert!(diff.cpu_temp.is_none()); // below threshold
+        assert!(diff.memory_usage.is_none()); // below threshold
+        assert!(diff.disk_usage.is_none()); // no change
+        assert!(diff.network_tx_bytes.is_none()); // below threshold
+        assert_eq!(diff.uptime_secs, Some(7201)); // changed
+    }
+
+    #[test]
+    fn test_sparse_telemetry_no_changes() {
+        let thresholds = TelemetryThresholds::default();
+
+        let data = TelemetryData {
+            cpu_usage: 50.0,
+            cpu_temp: Some(60.0),
+            memory_usage: 70.0,
+            disk_usage: 80.0,
+            network_tx_bytes: 100_000,
+            network_rx_bytes: 200_000,
+            uptime_secs: 7200,
+            load_average: [1.0, 2.0, 3.0],
+            gps: None,
+            motion_level: Some(0.3),
+        };
+
+        // Identical data should produce None
+        let diff = SparseTelemetry::diff(&data, &data, &thresholds);
+        assert!(diff.is_none());
+    }
+
+    #[test]
+    fn test_sparse_telemetry_merge() {
+        let mut state = TelemetryData::default();
+
+        // Apply a full heartbeat
+        let full = SparseTelemetry::from_full(&TelemetryData {
+            cpu_usage: 50.0,
+            cpu_temp: Some(60.0),
+            memory_usage: 70.0,
+            disk_usage: 80.0,
+            network_tx_bytes: 100_000,
+            network_rx_bytes: 200_000,
+            uptime_secs: 7200,
+            load_average: [1.0, 2.0, 3.0],
+            gps: None,
+            motion_level: None,
+        });
+        full.merge_into(&mut state);
+        assert_eq!(state.cpu_usage, 50.0);
+        assert_eq!(state.memory_usage, 70.0);
+
+        // Apply a sparse update (only CPU changed)
+        let sparse = SparseTelemetry {
+            full: false,
+            cpu_usage: Some(75.0),
+            cpu_temp: None,
+            memory_usage: None,
+            disk_usage: None,
+            network_tx_bytes: None,
+            network_rx_bytes: None,
+            uptime_secs: None,
+            load_average: None,
+            gps: None,
+            motion_level: None,
+        };
+        sparse.merge_into(&mut state);
+        assert_eq!(state.cpu_usage, 75.0);
+        assert_eq!(state.memory_usage, 70.0); // unchanged
     }
 
     #[test]

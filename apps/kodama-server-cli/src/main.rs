@@ -279,6 +279,22 @@ async fn main() -> Result<()> {
                             match result {
                                 Ok(receiver) => {
                                     info!(peer = %remote, "Detected as camera (opened stream)");
+
+                                    // Accept the command bi-stream from camera
+                                    let cmd_conn = conn.clone_handle();
+                                    let cmd_router = router.clone();
+                                    tokio::spawn(async move {
+                                        match cmd_conn.accept_command_stream().await {
+                                            Ok(cmd_stream) => {
+                                                info!(peer = %remote, "Command channel accepted from camera");
+                                                cmd_router.register_camera_commands(remote, cmd_stream);
+                                            }
+                                            Err(e) => {
+                                                warn!(peer = %remote, error = %e, "Failed to accept command stream from camera (commands unavailable)");
+                                            }
+                                        }
+                                    });
+
                                     if let Err(e) = router.handle_camera_with_receiver(remote, receiver).await {
                                         warn!(peer = %remote, error = %e, "Camera handler error");
                                     }
@@ -291,6 +307,22 @@ async fn main() -> Result<()> {
                         // Timeout - assume it's a client waiting for frames
                         _ = tokio::time::sleep(detect_timeout) => {
                             info!(peer = %remote, "Detected as client (no stream opened)");
+
+                            // Spawn task to accept client command stream
+                            let cmd_conn = conn.clone_handle();
+                            let cmd_router = router.clone();
+                            tokio::spawn(async move {
+                                match cmd_conn.accept_client_command_stream().await {
+                                    Ok(cmd_stream) => {
+                                        info!(peer = %remote, "Client command channel accepted");
+                                        cmd_router.handle_client_commands(remote, cmd_stream).await;
+                                    }
+                                    Err(e) => {
+                                        debug!(peer = %remote, error = %e, "No client command stream (client may not support commands)");
+                                    }
+                                }
+                            });
+
                             if let Err(e) = router.handle_client(conn).await {
                                 warn!(peer = %remote, error = %e, "Client handler error");
                             }

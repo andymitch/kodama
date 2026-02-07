@@ -5,10 +5,12 @@
 //! - Identity management (keys, NodeIds)
 //! - Protocol constants
 
+mod command;
 mod frame;
 mod identity;
 mod protocol;
 
+pub use command::*;
 pub use frame::{Channel, Frame, FrameFlags, SourceId};
 pub use identity::{Identity, KeyPair};
 pub use protocol::*;

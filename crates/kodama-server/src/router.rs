@@ -4,11 +4,19 @@ use anyhow::Result;
 use iroh::PublicKey;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::sync::{broadcast, oneshot, RwLock};
+use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
-use kodama_core::Frame;
-use kodama_relay::{RelayConnection, FrameReceiver};
+use kodama_core::{
+    Frame, Command, CommandMessage, CommandRequest, CommandResponse, CommandResult,
+    ClientCommandMessage,
+};
+use kodama_relay::{
+    RelayConnection, FrameReceiver,
+    CommandSender, CommandStream, ClientCommandStream,
+};
 
 /// Role of a connected peer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +49,15 @@ struct RouterInner {
     peers: RwLock<HashMap<PublicKey, PeerRole>>,
     /// Stats
     stats: RwLock<RouterStats>,
+    /// Command channels to cameras (keyed by camera PublicKey)
+    camera_commands: RwLock<HashMap<PublicKey, Arc<CameraCommandState>>>,
+}
+
+/// State for sending commands to a specific camera and receiving responses
+struct CameraCommandState {
+    sender: Arc<CommandSender>,
+    pending: RwLock<HashMap<u32, oneshot::Sender<CommandResponse>>>,
+    next_id: AtomicU32,
 }
 
 impl RouterHandle {
@@ -92,6 +109,7 @@ impl Router {
                 frame_tx,
                 peers: RwLock::new(HashMap::new()),
                 stats: RwLock::new(RouterStats::default()),
+                camera_commands: RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -263,6 +281,179 @@ impl Router {
 
         self.unregister_peer(remote).await;
         Ok(())
+    }
+
+    // ========== Command routing ==========
+
+    /// Register a camera's command stream.
+    ///
+    /// Stores the sender side and spawns a task to read responses
+    /// and dispatch them to pending oneshot channels.
+    pub fn register_camera_commands(&self, key: PublicKey, stream: CommandStream) {
+        let state = Arc::new(CameraCommandState {
+            sender: Arc::new(stream.sender),
+            pending: RwLock::new(HashMap::new()),
+            next_id: AtomicU32::new(1),
+        });
+
+        let inner = Arc::clone(&self.inner);
+        let state_clone = Arc::clone(&state);
+
+        // Store state
+        let inner2 = Arc::clone(&self.inner);
+        tokio::spawn(async move {
+            inner2.camera_commands.write().await.insert(key, state_clone.clone());
+
+            // Read responses from camera and dispatch to pending oneshot channels
+            let receiver = stream.receiver;
+            loop {
+                match receiver.recv().await {
+                    Ok(Some(CommandMessage::Response(resp))) => {
+                        if resp.id == 0 {
+                            // Ready signal from camera — ignore
+                            debug!(camera = %key, "Camera command channel ready");
+                            continue;
+                        }
+                        let mut pending = state_clone.pending.write().await;
+                        if let Some(tx) = pending.remove(&resp.id) {
+                            let _ = tx.send(resp);
+                        } else {
+                            warn!(camera = %key, id = resp.id, "Received response for unknown request");
+                        }
+                    }
+                    Ok(Some(CommandMessage::Request(_))) => {
+                        warn!(camera = %key, "Received unexpected request from camera");
+                    }
+                    Ok(None) => {
+                        info!(camera = %key, "Camera command stream closed");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(camera = %key, error = %e, "Camera command stream error");
+                        break;
+                    }
+                }
+            }
+
+            // Cleanup
+            inner.camera_commands.write().await.remove(&key);
+            info!(camera = %key, "Camera command channel unregistered");
+        });
+    }
+
+    /// Send a command to a camera and wait for the response.
+    pub async fn send_command(
+        &self,
+        camera_key: PublicKey,
+        command: Command,
+        timeout: Duration,
+    ) -> Result<CommandResponse> {
+        let state = {
+            let commands = self.inner.camera_commands.read().await;
+            commands.get(&camera_key).cloned()
+                .ok_or_else(|| anyhow::anyhow!("Camera {} has no command channel", camera_key))?
+        };
+
+        let id = state.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+
+        // Register pending response
+        state.pending.write().await.insert(id, tx);
+
+        // Send request
+        let msg = CommandMessage::Request(CommandRequest { id, command });
+        if let Err(e) = state.sender.send(&msg).await {
+            state.pending.write().await.remove(&id);
+            return Err(e);
+        }
+
+        // Wait for response with timeout
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(resp)) => Ok(resp),
+            Ok(Err(_)) => {
+                // oneshot sender was dropped (camera disconnected)
+                anyhow::bail!("Camera disconnected while waiting for response")
+            }
+            Err(_) => {
+                state.pending.write().await.remove(&id);
+                anyhow::bail!("Command timed out after {:?}", timeout)
+            }
+        }
+    }
+
+    /// Handle commands from a client, routing them to the targeted camera.
+    ///
+    /// Reads TargetedCommandRequests from the client, forwards each to the
+    /// appropriate camera via send_command, and sends the response back.
+    pub async fn handle_client_commands(&self, client_key: PublicKey, stream: ClientCommandStream) {
+        info!(client = %client_key, "Client command channel opened");
+
+        loop {
+            match stream.receiver.recv().await {
+                Ok(Some(ClientCommandMessage::Request(targeted))) => {
+                    debug!(
+                        client = %client_key,
+                        target = %targeted.target_camera,
+                        command = ?targeted.command,
+                        "Routing client command to camera"
+                    );
+
+                    // Parse camera key
+                    let camera_key = match targeted.target_camera.parse::<PublicKey>() {
+                        Ok(k) => k,
+                        Err(_) => {
+                            let resp = ClientCommandMessage::Response(CommandResponse {
+                                id: targeted.id,
+                                result: CommandResult::Error("Invalid camera key".into()),
+                            });
+                            if stream.sender.send(&resp).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+
+                    // Forward to camera with 30-second timeout
+                    let result = match self.send_command(
+                        camera_key,
+                        targeted.command,
+                        Duration::from_secs(30),
+                    ).await {
+                        Ok(camera_resp) => CommandResponse {
+                            id: targeted.id,
+                            result: camera_resp.result,
+                        },
+                        Err(e) => CommandResponse {
+                            id: targeted.id,
+                            result: CommandResult::Error(e.to_string()),
+                        },
+                    };
+
+                    let msg = ClientCommandMessage::Response(result);
+                    if stream.sender.send(&msg).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Some(ClientCommandMessage::Response(_))) => {
+                    warn!(client = %client_key, "Received unexpected response from client");
+                }
+                Ok(None) => {
+                    info!(client = %client_key, "Client command stream closed");
+                    break;
+                }
+                Err(e) => {
+                    warn!(client = %client_key, error = %e, "Client command stream error");
+                    break;
+                }
+            }
+        }
+
+        info!(client = %client_key, "Client command channel closed");
+    }
+
+    /// Get list of cameras that have command channels
+    pub async fn cameras_with_commands(&self) -> Vec<PublicKey> {
+        self.inner.camera_commands.read().await.keys().copied().collect()
     }
 }
 

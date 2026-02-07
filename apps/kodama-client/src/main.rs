@@ -26,9 +26,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
-use kodama_core::{Channel, Frame, SourceId};
+use kodama_core::{
+    Channel, Frame, SourceId,
+    Command, ClientCommandMessage, TargetedCommandRequest, CommandResult,
+    ConfigureParams, RecordParams, UpdateFirmwareParams, NetworkParams, NetworkAction,
+    ShellParams, DeleteRecordingParams, SendRecordingParams, StreamParams,
+};
 use kodama_relay::Relay;
-use kodama_capture::{decode_telemetry, TelemetryData};
+use kodama_capture::{decode_telemetry, SparseTelemetry};
 
 /// Client configuration from environment/args
 struct Config {
@@ -38,6 +43,8 @@ struct Config {
     save_frames_path: Option<PathBuf>,
     /// Show telemetry data
     show_telemetry: bool,
+    /// Send a command to a camera and exit (format: "camera_key:command")
+    send_command: Option<(String, String)>,
 }
 
 impl Config {
@@ -57,10 +64,20 @@ impl Config {
 
         let show_telemetry = !args.iter().any(|arg| arg == "--no-telemetry");
 
+        // --send-command CAMERA_KEY COMMAND (e.g. --send-command <key> status)
+        let send_command = args.iter()
+            .position(|arg| arg == "--send-command")
+            .and_then(|i| {
+                let camera = args.get(i + 1)?.clone();
+                let cmd = args.get(i + 2).cloned().unwrap_or_else(|| "status".into());
+                Some((camera, cmd))
+            });
+
         Ok(Self {
             server_key,
             save_frames_path,
             show_telemetry,
+            send_command,
         })
     }
 }
@@ -74,7 +91,7 @@ struct SourceStats {
     audio_frames: u64,
     audio_bytes: u64,
     telemetry_frames: u64,
-    last_telemetry: Option<TelemetryData>,
+    last_telemetry: Option<SparseTelemetry>,
 }
 
 /// Frame saver for debugging
@@ -154,6 +171,11 @@ async fn main() -> Result<()> {
         .context("Failed to connect to server")?;
     info!("Connected to server!");
 
+    // If --send-command was specified, send command and exit
+    if let Some((camera_key, cmd_name)) = config.send_command {
+        return send_command_and_exit(&conn, &camera_key, &cmd_name).await;
+    }
+
     // Wait for the server to open a frame stream to us
     info!("Waiting for frame stream from server...");
 
@@ -231,16 +253,15 @@ async fn main() -> Result<()> {
                                     g.altitude.map(|a| format!(" {:.1}m", a)).unwrap_or_default(),
                                 ))
                                 .unwrap_or_default();
+                            let load = telemetry.load_average.unwrap_or([0.0; 3]);
                             info!(
                                 "Telemetry [{}]: CPU={:.1}%{}, Mem={:.1}%, Load=[{:.2}, {:.2}, {:.2}], Up={}s{}{}",
                                 source,
-                                telemetry.cpu_usage,
+                                telemetry.cpu_usage.unwrap_or(0.0),
                                 telemetry.cpu_temp.map(|t| format!(", Temp={:.1}C", t)).unwrap_or_default(),
-                                telemetry.memory_usage,
-                                telemetry.load_average[0],
-                                telemetry.load_average[1],
-                                telemetry.load_average[2],
-                                telemetry.uptime_secs,
+                                telemetry.memory_usage.unwrap_or(0.0),
+                                load[0], load[1], load[2],
+                                telemetry.uptime_secs.unwrap_or(0),
                                 motion_str,
                                 gps_str,
                             );
@@ -333,4 +354,230 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Send a command to a camera via the server and print the response
+async fn send_command_and_exit(
+    conn: &kodama_relay::RelayConnection,
+    camera_key: &str,
+    cmd_name: &str,
+) -> Result<()> {
+    // Wait for server to detect us as client (timeout-based)
+    info!("Waiting for server role detection...");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    // Open client command stream
+    info!("Opening command stream...");
+    let cmd_stream = conn.open_client_command_stream().await
+        .context("Failed to open client command stream")?;
+
+    // Parse command — supports all Command variants
+    let command = parse_command(cmd_name)?;
+
+    // Send targeted command
+    let request = ClientCommandMessage::Request(TargetedCommandRequest {
+        id: 1,
+        target_camera: camera_key.to_string(),
+        command,
+    });
+
+    info!("Sending {} command to camera {}...", cmd_name, camera_key);
+    cmd_stream.sender.send(&request).await
+        .context("Failed to send command")?;
+
+    // Wait for response
+    info!("Waiting for response...");
+    match tokio::time::timeout(Duration::from_secs(15), cmd_stream.receiver.recv()).await {
+        Ok(Ok(Some(ClientCommandMessage::Response(resp)))) => {
+            print_command_result(&resp.result);
+        }
+        Ok(Ok(Some(other))) => {
+            anyhow::bail!("Unexpected message: {:?}", other);
+        }
+        Ok(Ok(None)) => {
+            anyhow::bail!("Command stream closed before response");
+        }
+        Ok(Err(e)) => {
+            anyhow::bail!("Command stream error: {}", e);
+        }
+        Err(_) => {
+            anyhow::bail!("Timeout waiting for command response (15s)");
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a command name (with optional inline args) into a Command
+///
+/// Supported formats:
+///   status                          → RequestStatus
+///   reboot                          → Reboot
+///   configure:fps=15,bitrate=2000000 → Configure
+///   record:start                    → Record { start: true }
+///   record:stop                     → Record { start: false }
+///   update-firmware:url=X,sha256=Y  → UpdateFirmware
+///   network:scan                    → Network(ScanWifi)
+///   network:status                  → Network(GetStatus)
+///   network:disconnect              → Network(DisconnectWifi)
+///   shell:COMMAND                   → Shell { command: COMMAND }
+///   list-recordings                 → ListRecordings
+///   delete-recording:ID             → DeleteRecording
+///   send-recording:ID,DEST          → SendRecording
+///   stream:start                    → Stream { start: true }
+///   stream:stop                     → Stream { start: false }
+fn parse_command(input: &str) -> Result<Command> {
+    let (name, args) = input.split_once(':').unwrap_or((input, ""));
+
+    match name {
+        "status" => Ok(Command::RequestStatus),
+        "reboot" => Ok(Command::Reboot),
+        "configure" => {
+            let mut params = ConfigureParams {
+                width: None,
+                height: None,
+                fps: None,
+                bitrate: None,
+                keyframe_interval: None,
+            };
+            for pair in args.split(',') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    match k {
+                        "width" => params.width = v.parse().ok(),
+                        "height" => params.height = v.parse().ok(),
+                        "fps" => params.fps = v.parse().ok(),
+                        "bitrate" => params.bitrate = v.parse().ok(),
+                        "keyframe_interval" => params.keyframe_interval = v.parse().ok(),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Command::Configure(params))
+        }
+        "record" => {
+            let start = args != "stop";
+            let duration_secs = args.strip_prefix("start,")
+                .and_then(|rest| rest.parse().ok());
+            Ok(Command::Record(RecordParams { start, duration_secs }))
+        }
+        "update-firmware" => {
+            let mut url = String::new();
+            let mut sha256 = String::new();
+            for pair in args.split(',') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    match k {
+                        "url" => url = v.to_string(),
+                        "sha256" => sha256 = v.to_string(),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Command::UpdateFirmware(UpdateFirmwareParams { url, sha256 }))
+        }
+        "network" => {
+            let action = match args {
+                "scan" => NetworkAction::ScanWifi,
+                "status" => NetworkAction::GetStatus,
+                "disconnect" => NetworkAction::DisconnectWifi,
+                _ => anyhow::bail!(
+                    "Unknown network action: '{}'. Available: scan, status, disconnect",
+                    args
+                ),
+            };
+            Ok(Command::Network(NetworkParams { action }))
+        }
+        "shell" => {
+            if args.is_empty() {
+                anyhow::bail!("Shell command required. Usage: shell:echo hello");
+            }
+            Ok(Command::Shell(ShellParams {
+                command: args.to_string(),
+                timeout_secs: Some(30),
+            }))
+        }
+        "list-recordings" => Ok(Command::ListRecordings),
+        "delete-recording" => {
+            if args.is_empty() {
+                anyhow::bail!("Recording ID required. Usage: delete-recording:ID");
+            }
+            Ok(Command::DeleteRecording(DeleteRecordingParams {
+                recording_id: args.to_string(),
+            }))
+        }
+        "send-recording" => {
+            let (id, dest) = args.split_once(',')
+                .context("Usage: send-recording:ID,DESTINATION")?;
+            Ok(Command::SendRecording(SendRecordingParams {
+                recording_id: id.to_string(),
+                destination: dest.to_string(),
+            }))
+        }
+        "stream" => {
+            let start = args != "stop";
+            Ok(Command::Stream(StreamParams { start }))
+        }
+        _ => {
+            anyhow::bail!(
+                "Unknown command: '{}'. Available: status, reboot, configure, record, \
+                 update-firmware, network, shell, list-recordings, delete-recording, \
+                 send-recording, stream",
+                name
+            );
+        }
+    }
+}
+
+/// Print a CommandResult in a human-readable format
+fn print_command_result(result: &CommandResult) {
+    match result {
+        CommandResult::Ok => {
+            println!("OK");
+        }
+        CommandResult::Error(e) => {
+            println!("ERROR: {}", e);
+        }
+        CommandResult::Status(status) => {
+            println!("Camera Status:");
+            println!("  CPU:        {:.1}%", status.cpu_percent);
+            println!("  Memory:     {} / {} MB",
+                status.memory_used / (1024 * 1024),
+                status.memory_total / (1024 * 1024));
+            if let Some(temp) = status.cpu_temp {
+                println!("  CPU Temp:   {:.1}C", temp);
+            }
+            println!("  Uptime:     {}s", status.uptime_secs);
+            println!("  Video:      {}", if status.video_active { "active" } else { "inactive" });
+            println!("  Audio:      {}", if status.audio_active { "active" } else { "inactive" });
+            if let Some((w, h)) = status.video_resolution {
+                println!("  Resolution: {}x{}", w, h);
+            }
+            if let Some(fps) = status.video_fps {
+                println!("  FPS:        {}", fps);
+            }
+            if let Some(br) = status.video_bitrate {
+                println!("  Bitrate:    {} bps", br);
+            }
+        }
+        CommandResult::RecordingsList(recordings) => {
+            if recordings.is_empty() {
+                println!("No recordings found.");
+            } else {
+                println!("Recordings ({}):", recordings.len());
+                for r in recordings {
+                    println!("  {} | {}s | {} bytes | started {}", r.id, r.duration_secs, r.size_bytes, r.start_time);
+                }
+            }
+        }
+        CommandResult::ShellOutput(output) => {
+            if !output.stdout.is_empty() {
+                print!("{}", output.stdout);
+            }
+            if !output.stderr.is_empty() {
+                eprint!("{}", output.stderr);
+            }
+            if output.exit_code != 0 {
+                println!("(exit code: {})", output.exit_code);
+            }
+        }
+    }
 }

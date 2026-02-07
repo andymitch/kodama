@@ -9,6 +9,7 @@ description = "Core types and protocol definitions for Kodama"
 [dependencies]
 bytes = { workspace = true }
 serde = { workspace = true }
+rmp-serde = { workspace = true }
 iroh = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

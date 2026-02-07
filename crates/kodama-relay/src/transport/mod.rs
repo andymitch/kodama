@@ -7,3 +7,5 @@ mod connection;
 
 pub use endpoint::KodamaEndpoint;
 pub use connection::{FrameSender, FrameReceiver, FrameStream};
+pub use connection::{CommandSender, CommandReceiver, CommandStream};
+pub use connection::{ClientCommandSender, ClientCommandReceiver, ClientCommandStream};

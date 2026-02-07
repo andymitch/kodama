@@ -13,7 +13,7 @@ use kodama_server::{
     Router, StorageManager, StorageConfig as ServerStorageConfig,
     LocalStorage, LocalStorageConfig, StorageBackend,
 };
-use kodama_capture::decode_telemetry;
+use kodama_capture::{decode_telemetry, TelemetryData};
 
 use crate::events::{
     AudioDataEvent, AudioLevelEvent, CameraEvent, GpsEvent, TelemetryEvent, VideoInitEvent, VideoSegmentEvent,
@@ -52,6 +52,7 @@ pub struct StorageStats {
 struct SourceMuxState {
     muxer: Fmp4Muxer,
     last_audio_emit: std::time::Instant,
+    telemetry_state: TelemetryData,
 }
 
 /// Process a frame and emit appropriate Tauri events
@@ -69,6 +70,7 @@ fn process_frame(
                 .or_insert_with(|| SourceMuxState {
                     muxer: Fmp4Muxer::new(),
                     last_audio_emit: std::time::Instant::now(),
+                    telemetry_state: TelemetryData::default(),
                 });
 
             let result = mux_state.muxer.mux_frame(
@@ -128,6 +130,7 @@ fn process_frame(
                 .or_insert_with(|| SourceMuxState {
                     muxer: Fmp4Muxer::new(),
                     last_audio_emit: std::time::Instant::now(),
+                    telemetry_state: TelemetryData::default(),
                 });
             // Emit audio level (throttled to ~10/sec)
             if mux_state.last_audio_emit.elapsed() >= std::time::Duration::from_millis(100) {
@@ -151,16 +154,31 @@ fn process_frame(
             });
         }
         Channel::Telemetry => {
-            if let Ok(telemetry) = decode_telemetry(&frame.payload) {
+            if let Ok(sparse) = decode_telemetry(&frame.payload) {
+                let mux_state = muxers
+                    .entry(frame.source)
+                    .or_insert_with(|| SourceMuxState {
+                        muxer: Fmp4Muxer::new(),
+                        last_audio_emit: std::time::Instant::now(),
+                        telemetry_state: TelemetryData::default(),
+                    });
+
+                // Merge sparse update into running state
+                if sparse.full {
+                    mux_state.telemetry_state = TelemetryData::default();
+                }
+                sparse.merge_into(&mut mux_state.telemetry_state);
+
+                let state = &mux_state.telemetry_state;
                 let _ = app.emit("telemetry", TelemetryEvent {
                     source_id,
-                    cpu_usage: telemetry.cpu_usage,
-                    cpu_temp: telemetry.cpu_temp,
-                    memory_usage: telemetry.memory_usage,
-                    disk_usage: telemetry.disk_usage,
-                    uptime_secs: telemetry.uptime_secs,
-                    load_average: telemetry.load_average,
-                    gps: telemetry.gps.map(|g| GpsEvent {
+                    cpu_usage: state.cpu_usage,
+                    cpu_temp: state.cpu_temp,
+                    memory_usage: state.memory_usage,
+                    disk_usage: state.disk_usage,
+                    uptime_secs: state.uptime_secs,
+                    load_average: state.load_average,
+                    gps: state.gps.as_ref().map(|g| GpsEvent {
                         latitude: g.latitude,
                         longitude: g.longitude,
                         altitude: g.altitude,
@@ -168,7 +186,7 @@ fn process_frame(
                         heading: g.heading,
                         fix_mode: g.fix_mode,
                     }),
-                    motion_level: telemetry.motion_level,
+                    motion_level: state.motion_level,
                 });
             }
         }
