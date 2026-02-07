@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## General
+
+- **Always use `bun` instead of `npm`/`node`** for JavaScript/TypeScript tasks (install, run, build, etc.)
+
 ## Commands
 
 ### Setup (Required after `cargo update`)

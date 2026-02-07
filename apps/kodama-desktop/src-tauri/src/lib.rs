@@ -6,6 +6,8 @@
 //! - Client mode: Connects to an external server as a viewer
 
 mod commands;
+mod events;
+mod fmp4_ffmpeg; // FFmpeg-based fMP4 muxer
 mod state;
 
 use tauri::Manager;
@@ -34,6 +36,12 @@ pub fn run() {
             // Initialize app state
             let state = AppState::new();
             app.manage(state);
+
+            // Open devtools in debug builds
+            #[cfg(debug_assertions)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+            }
 
             tracing::info!("App state initialized");
             Ok(())

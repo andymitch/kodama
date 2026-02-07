@@ -1,15 +1,24 @@
 //! Tauri commands for the desktop app
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use serde::Serialize;
+use tokio::sync::RwLock;
+use tokio::time::Duration;
 
+use kodama_core::{Channel, Frame, SourceId};
 use kodama_relay::Relay;
 use kodama_server::{
     Router, StorageManager, StorageConfig as ServerStorageConfig,
     LocalStorage, LocalStorageConfig, StorageBackend,
 };
+use kodama_capture::decode_telemetry;
 
+use crate::events::{
+    AudioDataEvent, AudioLevelEvent, CameraEvent, TelemetryEvent, VideoInitEvent, VideoSegmentEvent,
+};
+use crate::fmp4_ffmpeg::Fmp4Muxer; // Using FFmpeg-based muxer
 use crate::state::{AppMode, AppState, ServerState, ClientState, CameraInfo, StorageConfig, AppSettings};
 
 /// Server status response
@@ -39,9 +48,151 @@ pub struct StorageStats {
     pub bytes_cleaned: u64,
 }
 
+/// Per-source muxer state shared across frame processing
+struct SourceMuxState {
+    muxer: Fmp4Muxer,
+    last_audio_emit: std::time::Instant,
+}
+
+/// Process a frame and emit appropriate Tauri events
+fn process_frame(
+    app: &AppHandle,
+    frame: &Frame,
+    muxers: &mut HashMap<SourceId, SourceMuxState>,
+) {
+    let source_id = format!("{}", frame.source);
+
+    match frame.channel {
+        Channel::Video => {
+            let mux_state = muxers
+                .entry(frame.source)
+                .or_insert_with(|| SourceMuxState {
+                    muxer: Fmp4Muxer::new(),
+                    last_audio_emit: std::time::Instant::now(),
+                });
+
+            let result = mux_state.muxer.mux_frame(
+                &frame.payload,
+                frame.flags.is_keyframe(),
+                frame.timestamp_us,
+            );
+
+            if let Some(init) = result.init_segment {
+                let codec = result.codec.unwrap_or_else(|| "avc1.42001e".to_string());
+                let width = result.width.unwrap_or(640);
+                let height = result.height.unwrap_or(480);
+                tracing::info!("Emitting video-init: {}x{} codec={} init_size={}", width, height, codec, init.len());
+                // Dump init segment for debugging
+                if let Err(e) = std::fs::write("/tmp/kodama_init_debug.mp4", &init) {
+                    tracing::warn!("Failed to dump init segment: {}", e);
+                }
+                let _ = app.emit("video-init", VideoInitEvent {
+                    source_id: source_id.clone(),
+                    codec,
+                    width,
+                    height,
+                    init_segment: base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &init,
+                    ),
+                });
+            }
+
+            if let Some(ref segment) = result.media_segment {
+                tracing::info!("Emitting video-segment: source={}, size={}", source_id, segment.len());
+
+                // Debug: dump first media segment
+                static DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    if let Err(e) = std::fs::write("/tmp/kodama_media_segment.m4s", segment) {
+                        tracing::warn!("Failed to dump media segment: {}", e);
+                    } else {
+                        tracing::info!("Dumped first media segment to /tmp/kodama_media_segment.m4s");
+                    }
+                }
+
+                let _ = app.emit("video-segment", VideoSegmentEvent {
+                    source_id,
+                    data: base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        segment,
+                    ),
+                });
+            } else if frame.flags.is_keyframe() {
+                tracing::warn!("Keyframe but no media segment! This shouldn't happen.");
+            }
+        }
+        Channel::Audio => {
+            let mux_state = muxers
+                .entry(frame.source)
+                .or_insert_with(|| SourceMuxState {
+                    muxer: Fmp4Muxer::new(),
+                    last_audio_emit: std::time::Instant::now(),
+                });
+            // Emit audio level (throttled to ~10/sec)
+            if mux_state.last_audio_emit.elapsed() >= std::time::Duration::from_millis(100) {
+                mux_state.last_audio_emit = std::time::Instant::now();
+                let level_db = compute_audio_rms(&frame.payload);
+                let _ = app.emit("audio-level", AudioLevelEvent {
+                    source_id: source_id.clone(),
+                    level_db,
+                });
+            }
+
+            // Emit audio data for playback (every frame for smooth audio)
+            let _ = app.emit("audio-data", AudioDataEvent {
+                source_id,
+                data: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &frame.payload,
+                ),
+                sample_rate: 48000,
+                channels: 1,
+            });
+        }
+        Channel::Telemetry => {
+            if let Ok(telemetry) = decode_telemetry(&frame.payload) {
+                let _ = app.emit("telemetry", TelemetryEvent {
+                    source_id,
+                    cpu_usage: telemetry.cpu_usage,
+                    cpu_temp: telemetry.cpu_temp,
+                    memory_usage: telemetry.memory_usage,
+                    disk_usage: telemetry.disk_usage,
+                    uptime_secs: telemetry.uptime_secs,
+                    load_average: telemetry.load_average,
+                });
+            }
+        }
+    }
+}
+
+/// Compute RMS level in dB from PCM s16le audio data
+fn compute_audio_rms(data: &[u8]) -> f32 {
+    if data.len() < 2 {
+        return -60.0;
+    }
+
+    let mut sum_sq = 0.0f64;
+    let sample_count = data.len() / 2;
+
+    for chunk in data.chunks_exact(2) {
+        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
+        sum_sq += sample * sample;
+    }
+
+    if sample_count == 0 {
+        return -60.0;
+    }
+
+    let rms = (sum_sq / sample_count as f64).sqrt();
+    let db = 20.0 * (rms / 32768.0).log10();
+    db.max(-60.0) as f32
+}
+
 /// Start the server
 #[tauri::command]
 pub async fn start_server(
+    app: AppHandle,
     state: State<'_, AppState>,
     storage_config: Option<StorageConfig>,
 ) -> Result<String, String> {
@@ -109,10 +260,115 @@ pub async fn start_server(
         storage,
     });
 
-    *state.server.write().await = Some(server_state);
+    *state.server.write().await = Some(server_state.clone());
     *mode = AppMode::Server;
 
-    // TODO: Spawn connection accept loop
+    // Spawn connection accept loop
+    let cameras_state = state.cameras.clone();
+    let accept_task = tokio::spawn(async move {
+        // Subscribe to broadcast for local frame processing (video mux, audio, telemetry)
+        let mut local_rx = server_state.handle.subscribe();
+        let app_for_local = app.clone();
+        tokio::spawn(async move {
+            let mut muxers: HashMap<SourceId, SourceMuxState> = HashMap::new();
+            loop {
+                match local_rx.recv().await {
+                    Ok(frame) => {
+                        process_frame(&app_for_local, &frame, &mut muxers);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Local frame processing lagged, missed {} frames", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("Broadcast closed, stopping local frame processing");
+                        break;
+                    }
+                }
+            }
+        });
+
+        loop {
+            match server_state.relay.accept().await {
+                Some(conn) => {
+                    let remote = conn.remote_public_key();
+                    tracing::info!("New connection from: {}", remote);
+
+                    let router = server_state.router.clone();
+                    let app_clone = app.clone();
+                    let cameras: Arc<RwLock<Vec<CameraInfo>>> = cameras_state.clone();
+
+                    tokio::spawn(async move {
+                        let detect_timeout = Duration::from_secs(2);
+
+                        tokio::select! {
+                            result = conn.accept_frame_stream() => {
+                                match result {
+                                    Ok(receiver) => {
+                                        tracing::info!(peer = %remote, "Detected as camera");
+
+                                        let source_id = SourceId::from_node_id_bytes(
+                                            remote.as_bytes()
+                                        );
+                                        let source_str = format!("{}", source_id);
+
+                                        // Add to cameras list
+                                        {
+                                            let mut cams = cameras.write().await;
+                                            cams.push(CameraInfo {
+                                                id: source_str.clone(),
+                                                name: format!("Camera {}", &source_str[..8]),
+                                                connected: true,
+                                                last_frame_time: None,
+                                            });
+                                        }
+
+                                        match app_clone.emit("camera-event", CameraEvent {
+                                            source_id: source_str.clone(),
+                                            connected: true,
+                                        }) {
+                                            Ok(_) => tracing::info!("Emitted camera-event connected for {}", &source_str[..8]),
+                                            Err(e) => tracing::error!("Failed to emit camera-event: {}", e),
+                                        }
+
+                                        // Handle camera frames via router (broadcasts to clients + local subscriber)
+                                        if let Err(e) = router.handle_camera_with_receiver(remote, receiver).await {
+                                            tracing::warn!(peer = %remote, error = %e, "Camera handler error");
+                                        }
+
+                                        // Camera disconnected - remove from list
+                                        {
+                                            let mut cams = cameras.write().await;
+                                            cams.retain(|c| c.id != source_str);
+                                        }
+
+                                        let _ = app_clone.emit("camera-event", CameraEvent {
+                                            source_id: source_str,
+                                            connected: false,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(peer = %remote, error = %e, "Failed to accept stream");
+                                    }
+                                }
+                            }
+                            _ = tokio::time::sleep(detect_timeout) => {
+                                tracing::info!(peer = %remote, "Detected as client");
+                                if let Err(e) = router.handle_client(conn).await {
+                                    tracing::warn!(peer = %remote, error = %e, "Client handler error");
+                                }
+                            }
+                        }
+                    });
+                }
+                None => {
+                    tracing::info!("Relay accept returned None, stopping accept loop");
+                    break;
+                }
+            }
+        }
+    });
+
+    *state.accept_task.write().await = Some(accept_task);
 
     Ok(public_key)
 }
@@ -124,6 +380,14 @@ pub async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
     if *mode != AppMode::Server {
         return Err("Not running as server".to_string());
     }
+
+    // Abort accept task
+    if let Some(task) = state.accept_task.write().await.take() {
+        task.abort();
+    }
+
+    // Clean up cameras list
+    state.cameras.write().await.clear();
 
     // Clean up server state
     let mut server = state.server.write().await;
@@ -168,6 +432,7 @@ pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatu
 /// Connect to an external server as a client
 #[tauri::command]
 pub async fn connect_to_server(
+    app: AppHandle,
     state: State<'_, AppState>,
     server_key: String,
 ) -> Result<(), String> {
@@ -187,7 +452,7 @@ pub async fn connect_to_server(
     tracing::info!("Connecting to server: {}", server_key);
 
     // Connect to server
-    let _conn = relay.connect(public_key).await
+    let conn = relay.connect(public_key).await
         .map_err(|e| format!("Failed to connect: {}", e))?;
 
     tracing::info!("Connected to server!");
@@ -201,7 +466,63 @@ pub async fn connect_to_server(
     *state.client.write().await = Some(client_state);
     *mode = AppMode::Client;
 
-    // TODO: Spawn frame receiving loop
+    // Spawn frame receiving loop
+    let cameras_state: Arc<RwLock<Vec<CameraInfo>>> = state.cameras.clone();
+    let receive_task = tokio::spawn(async move {
+        // Wait for server to detect us as a client and open a stream
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let receiver = match conn.accept_frame_stream().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Failed to accept frame stream: {}", e);
+                return;
+            }
+        };
+
+        tracing::info!("Frame stream opened, receiving frames...");
+
+        let mut muxers: HashMap<SourceId, SourceMuxState> = HashMap::new();
+        let mut known_sources: std::collections::HashSet<SourceId> = std::collections::HashSet::new();
+
+        loop {
+            match receiver.recv().await {
+                Ok(Some(frame)) => {
+                    // Track new cameras by source ID
+                    if known_sources.insert(frame.source) {
+                        let source_str = format!("{}", frame.source);
+
+                        {
+                            let mut cams = cameras_state.write().await;
+                            cams.push(CameraInfo {
+                                id: source_str.clone(),
+                                name: format!("Camera {}", &source_str[..8]),
+                                connected: true,
+                                last_frame_time: None,
+                            });
+                        }
+
+                        let _ = app.emit("camera-event", CameraEvent {
+                            source_id: source_str,
+                            connected: true,
+                        });
+                    }
+
+                    process_frame(&app, &frame, &mut muxers);
+                }
+                Ok(None) => {
+                    tracing::info!("Frame stream closed by server");
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("Frame stream error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    *state.receive_task.write().await = Some(receive_task);
 
     Ok(())
 }
@@ -213,6 +534,14 @@ pub async fn disconnect(state: State<'_, AppState>) -> Result<(), String> {
     if *mode != AppMode::Client {
         return Err("Not connected as client".to_string());
     }
+
+    // Abort receive task
+    if let Some(task) = state.receive_task.write().await.take() {
+        task.abort();
+    }
+
+    // Clean up cameras list
+    state.cameras.write().await.clear();
 
     // Clean up client state
     let mut client = state.client.write().await;
@@ -291,7 +620,6 @@ pub async fn configure_storage(
 ) -> Result<(), String> {
     let mut settings = state.settings.write().await;
     settings.storage = config;
-    // TODO: Persist settings
     Ok(())
 }
 
@@ -310,6 +638,5 @@ pub async fn save_settings(
 ) -> Result<(), String> {
     let mut current = state.settings.write().await;
     *current = settings;
-    // TODO: Persist to disk
     Ok(())
 }

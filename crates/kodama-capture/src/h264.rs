@@ -71,14 +71,14 @@ impl NalUnitType {
     }
 
     /// Check if this is a slice (actual video data)
+    ///
+    /// Note: Excludes data partition slices (PartA/B/C) as they're not well
+    /// supported by modern browsers and cause MEDIA_ERR_DECODE errors.
     pub fn is_slice(&self) -> bool {
         matches!(
             self,
             NalUnitType::SliceNonIdr
                 | NalUnitType::SliceIdr
-                | NalUnitType::SliceDataPartA
-                | NalUnitType::SliceDataPartB
-                | NalUnitType::SliceDataPartC
         )
     }
 }

@@ -97,44 +97,14 @@
     }
   }
 
-  async function refreshCameras() {
-    try {
-      const list = await invoke<Array<{ id: string; name: string; connected: boolean }>>('list_cameras');
-      if (list.length > 0) {
-        cameras = list;
-      }
-    } catch { /* not connected yet */ }
-  }
-
   onMount(async () => {
     if (!isTauri) return;
 
     const { listen } = await import('@tauri-apps/api/event');
 
-    // Restore state on mount (handles HMR/page reload)
-    try {
-      const status = await invoke<{ running: boolean; public_key: string | null }>('get_server_status');
-      console.log('[Page] get_server_status:', JSON.stringify(status));
-      if (status.running && status.public_key) {
-        mode = 'server';
-        connectionState = 'connected';
-        serverKey = status.public_key;
-        error = null;
-      }
-    } catch (e) { console.error('[Page] get_server_status error:', e); }
-    try {
-      const conn = await invoke<{ connected: boolean; mode: string; server_key: string | null }>('get_connection_status');
-      console.log('[Page] get_connection_status:', JSON.stringify(conn));
-      if (conn.connected && conn.mode === 'client') {
-        mode = 'client';
-        connectionState = 'connected';
-        error = null;
-      }
-    } catch (e) { console.error('[Page] get_connection_status error:', e); }
-    await refreshCameras();
-    console.log('[Page] cameras after refresh:', cameras.length);
-
+    console.log('[Kodama] Registering camera-event listener');
     unlistenCamera = await listen<CameraEvent>('camera-event', (event) => {
+      console.log('[Kodama] camera-event received:', event.payload);
       const { source_id, connected } = event.payload;
       if (connected) {
         // Add camera if not already present

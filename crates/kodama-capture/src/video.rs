@@ -35,7 +35,7 @@ impl Default for VideoCaptureConfig {
             fps: 30,
             bitrate: 0, // Auto
             inline_headers: true,
-            keyframe_interval: 60, // Every 2 seconds at 30fps
+            keyframe_interval: 20, // Every 0.66s at 30fps (balanced)
         }
     }
 }
@@ -100,6 +100,7 @@ impl VideoCapture {
             "-o".to_string(),
             "-".to_string(), // Output to stdout
             "--flush".to_string(), // Flush output immediately
+            "-n".to_string(), // No preview window (headless)
         ];
 
         if config.inline_headers {
@@ -116,23 +117,30 @@ impl VideoCapture {
             args.push(config.keyframe_interval.to_string());
         }
 
-        info!(
-            "Starting libcamera-vid: {}x{} @ {}fps",
-            config.width, config.height, config.fps
-        );
-        debug!("libcamera-vid args: {:?}", args);
+        // Try rpicam-vid first (modern Pi OS), fall back to libcamera-vid (legacy)
+        let cmd = if Command::new("rpicam-vid").arg("--help").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+            "rpicam-vid"
+        } else {
+            "libcamera-vid"
+        };
 
-        let mut child = Command::new("libcamera-vid")
+        info!(
+            "Starting {}: {}x{} @ {}fps",
+            cmd, config.width, config.height, config.fps
+        );
+        debug!("{} args: {:?}", cmd, args);
+
+        let mut child = Command::new(cmd)
             .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("Failed to spawn libcamera-vid. Is it installed?")?;
+            .context(format!("Failed to spawn {}. Is it installed?", cmd))?;
 
         let stdout = child
             .stdout
             .take()
-            .context("Failed to capture stdout from libcamera-vid")?;
+            .context(format!("Failed to capture stdout from {}", cmd))?;
 
         // Spawn blocking reader task
         let read_config = config.clone();
@@ -225,9 +233,9 @@ impl Drop for VideoCapture {
 pub struct TestSourceConfig {
     /// Frames per second
     pub fps: u32,
-    /// Simulated frame size in bytes
+    /// Simulated frame size in bytes (ignored - real H.264 sizes used)
     pub frame_size: usize,
-    /// Simulate keyframes every N frames
+    /// Simulate keyframes every N frames (ignored - real H.264 keyframe interval used)
     pub keyframe_interval: u32,
 }
 
@@ -236,62 +244,119 @@ impl Default for TestSourceConfig {
     fn default() -> Self {
         Self {
             fps: 30,
-            frame_size: 10000, // ~10KB per frame
+            frame_size: 15000,
             keyframe_interval: 30,
         }
     }
 }
 
-/// Start a test video source that generates fake H.264-like frames
+/// Embedded H.264 Annex B test stream (320x240 baseline, 30fps, 2 seconds)
+#[cfg(feature = "test-source")]
+static TEST_H264_DATA: &[u8] = include_bytes!("test_video.h264");
+
+/// Split embedded H.264 Annex B stream into per-frame chunks.
+/// Each keyframe chunk includes SPS+PPS+IDR NALs.
+/// Each P-frame chunk includes a single Non-IDR slice NAL.
+#[cfg(feature = "test-source")]
+fn split_h264_frames(data: &[u8]) -> Vec<(Vec<u8>, bool)> {
+    let mut frames = Vec::new();
+    let mut current_frame = Vec::new();
+    let mut is_keyframe = false;
+
+    // Parse NAL units by finding start codes
+    let mut i = 0;
+    let mut nal_starts: Vec<(usize, usize)> = Vec::new(); // (offset_after_sc, sc_len)
+    while i < data.len().saturating_sub(3) {
+        if i + 4 <= data.len() && data[i..i + 4] == [0, 0, 0, 1] {
+            nal_starts.push((i + 4, 4));
+            i += 4;
+        } else if data[i..i + 3] == [0, 0, 1] {
+            nal_starts.push((i + 3, 3));
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+
+    for (idx, &(nal_body_start, sc_len)) in nal_starts.iter().enumerate() {
+        let nal_start = nal_body_start - sc_len;
+        let nal_end = if idx + 1 < nal_starts.len() {
+            nal_starts[idx + 1].0 - nal_starts[idx + 1].1
+        } else {
+            data.len()
+        };
+        let nal_type = data[nal_body_start] & 0x1F;
+        let nal_data = &data[nal_start..nal_end];
+
+        match nal_type {
+            7 | 8 | 6 => {
+                // SPS, PPS, SEI - accumulate into keyframe
+                current_frame.extend_from_slice(nal_data);
+                is_keyframe = true;
+            }
+            5 => {
+                // IDR slice - complete the keyframe
+                current_frame.extend_from_slice(nal_data);
+                frames.push((current_frame.clone(), true));
+                current_frame.clear();
+                is_keyframe = false;
+            }
+            1 => {
+                // Non-IDR P-frame
+                if !current_frame.is_empty() {
+                    // Flush any accumulated non-slice NALs
+                    frames.push((current_frame.clone(), is_keyframe));
+                    current_frame.clear();
+                    is_keyframe = false;
+                }
+                frames.push((nal_data.to_vec(), false));
+            }
+            _ => {
+                current_frame.extend_from_slice(nal_data);
+            }
+        }
+    }
+
+    frames
+}
+
+/// Start a test video source that generates real H.264 Annex B frames
 #[cfg(feature = "test-source")]
 pub fn start_test_source(config: TestSourceConfig) -> mpsc::Receiver<Bytes> {
-    use tokio::time::{interval, Duration, Instant};
+    use tokio::time::{interval, Duration};
 
     let (tx, rx) = mpsc::channel(config.fps as usize);
 
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_micros(1_000_000 / config.fps as u64));
-        let mut frame_num = 0u32;
-        let start = Instant::now();
+        let frames = split_h264_frames(TEST_H264_DATA);
+        let mut frame_idx = 0usize;
+        let mut total_sent = 0u64;
 
         info!(
-            "Test video source started: {}fps, {}B frames",
-            config.fps, config.frame_size
+            "Test video source started: {}fps, {} H.264 frames (looping)",
+            config.fps,
+            frames.len()
         );
 
         loop {
             interval.tick().await;
 
-            let is_keyframe = frame_num % config.keyframe_interval == 0;
-            let timestamp_us = start.elapsed().as_micros() as u64;
+            let (ref data, _is_keyframe) = frames[frame_idx];
+            frame_idx = (frame_idx + 1) % frames.len();
+            total_sent += 1;
 
-            // Build fake frame
-            let mut data = Vec::with_capacity(config.frame_size);
-
-            // Frame header
-            data.extend_from_slice(&frame_num.to_be_bytes());
-            data.push(if is_keyframe { 0x01 } else { 0x00 });
-            data.extend_from_slice(&timestamp_us.to_be_bytes());
-
-            // Padding with pattern (simulates compressed video data)
-            while data.len() < config.frame_size {
-                data.push((frame_num & 0xFF) as u8);
-            }
-            data.truncate(config.frame_size);
-
-            if tx.send(Bytes::from(data)).await.is_err() {
+            if tx.send(Bytes::from(data.clone())).await.is_err() {
                 info!("Test source receiver dropped");
                 break;
             }
 
-            frame_num = frame_num.wrapping_add(1);
-
-            if frame_num % 300 == 0 {
-                debug!("Test source: {} frames generated", frame_num);
+            if total_sent % 300 == 0 {
+                debug!("Test source: {} frames sent", total_sent);
             }
         }
 
-        info!("Test video source stopped after {} frames", frame_num);
+        info!("Test video source stopped after {} frames", total_sent);
     });
 
     rx

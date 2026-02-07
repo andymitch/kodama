@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use serde::{Deserialize, Serialize};
 use iroh::PublicKey;
 
@@ -85,7 +86,7 @@ impl Default for AppSettings {
             default_mode: AppMode::Idle,
             server_key: None,
             storage: StorageConfig::default(),
-            buffer_size: 64,
+            buffer_size: 512,
         }
     }
 }
@@ -96,7 +97,9 @@ pub struct AppState {
     pub server: RwLock<Option<Arc<ServerState>>>,
     pub client: RwLock<Option<Arc<ClientState>>>,
     pub settings: RwLock<AppSettings>,
-    pub cameras: RwLock<Vec<CameraInfo>>,
+    pub cameras: Arc<RwLock<Vec<CameraInfo>>>,
+    pub accept_task: RwLock<Option<JoinHandle<()>>>,
+    pub receive_task: RwLock<Option<JoinHandle<()>>>,
 }
 
 impl AppState {
@@ -106,7 +109,9 @@ impl AppState {
             server: RwLock::new(None),
             client: RwLock::new(None),
             settings: RwLock::new(AppSettings::default()),
-            cameras: RwLock::new(Vec::new()),
+            cameras: Arc::new(RwLock::new(Vec::new())),
+            accept_task: RwLock::new(None),
+            receive_task: RwLock::new(None),
         }
     }
 }

@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
 
     // Start video capture
     let video_tx = combined_tx.clone();
+    let mut _video_capture = None;
     let video_rx = if config.test_source {
         #[cfg(feature = "test-source")]
         {
@@ -178,8 +179,9 @@ async fn main() -> Result<()> {
         }
     } else {
         info!("Starting video capture");
-        let (_capture, rx) = kodama_capture::VideoCapture::start(config.video.clone())
+        let (capture, rx) = kodama_capture::VideoCapture::start(config.video.clone())
             .context("Failed to start video capture")?;
+        _video_capture = Some(capture);
         rx
     };
 
@@ -195,7 +197,8 @@ async fn main() -> Result<()> {
     });
 
     // Start audio capture
-    let _audio_capture = if config.enable_audio {
+    let mut _audio_capture_handle = None;
+    let _audio_enabled = if config.enable_audio {
         let audio_tx = combined_tx.clone();
 
         let audio_rx = if config.test_source {
@@ -211,8 +214,9 @@ async fn main() -> Result<()> {
             }
         } else {
             match AudioCapture::start(config.audio.clone()) {
-                Ok((_capture, rx)) => {
+                Ok((capture, rx)) => {
                     info!("Audio capture started");
+                    _audio_capture_handle = Some(capture);
                     Some(rx)
                 }
                 Err(e) => {
@@ -239,11 +243,13 @@ async fn main() -> Result<()> {
     };
 
     // Start telemetry capture
-    let _telemetry_capture = if config.enable_telemetry {
+    let mut _telemetry_capture_handle = None;
+    let _telemetry_enabled = if config.enable_telemetry {
         let telemetry_tx = combined_tx.clone();
 
         match TelemetryCapture::start(config.telemetry.clone()) {
-            Ok((_capture, mut rx)) => {
+            Ok((capture, mut rx)) => {
+                _telemetry_capture_handle = Some(capture);
                 info!("Telemetry capture started (interval: {}s)", config.telemetry.interval_secs);
 
                 tokio::spawn(async move {
