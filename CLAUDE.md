@@ -49,6 +49,50 @@ cd apps/kodama-desktop && npm run tauri dev
 cd apps/kodama-mobile && npm run tauri dev
 ```
 
+## Pi Deployment
+
+### Pi Camera Setup
+- **Device**: Pi Zero 2W
+- **IP Address**: `10.0.0.229`
+- **User**: `yurei`
+- **Password**: `password`
+- **Camera**: IMX219 sensor
+- **OS**: Debian 13 (trixie) with `rpicam-vid` (NOT `libcamera-vid`)
+
+### Connecting to Pi
+```bash
+# SSH into Pi
+ssh yurei@10.0.0.229
+# Password: password
+
+# SSH with password automation (for scripts)
+sshpass -p "password" ssh yurei@10.0.0.229
+```
+
+### Build & Deploy Camera
+```bash
+# Cross-compile for Pi (aarch64)
+cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera
+
+# Deploy to Pi
+sshpass -p "password" scp -o StrictHostKeyChecking=no \
+  target/aarch64-unknown-linux-gnu/release/kodama-camera \
+  yurei@10.0.0.229:~/kodama/
+
+# Run on Pi (replace <server_key> with actual key from desktop app)
+sshpass -p "password" ssh yurei@10.0.0.229 \
+  "cd ~/kodama && KODAMA_SERVER_KEY=<server_key> KODAMA_KEY_PATH=/home/yurei/kodama/camera.key ./kodama-camera"
+```
+
+### Notes
+- Use `KODAMA_KEY_PATH=/home/yurei/kodama/camera.key` (default `/var/lib/kodama/camera.key` requires root)
+- A `yurei` service may be running and holding the camera - stop it first:
+  ```bash
+  ssh yurei@10.0.0.229 "sudo systemctl stop yurei"
+  # or
+  ssh yurei@10.0.0.229 "sudo pkill -f '/usr/local/bin/yurei'"
+  ```
+
 ## Architecture
 
 Kodama is a privacy-focused P2P security camera system using Iroh for transport.
