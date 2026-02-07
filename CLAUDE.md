@@ -58,23 +58,30 @@ cd apps/kodama-mobile && npm run tauri dev
 - **Password**: `password`
 - **Camera**: IMX219 sensor
 - **OS**: Debian 13 (trixie) with `rpicam-vid` (NOT `libcamera-vid`)
+- **GPS**: SimTech SIM7600G-H USB modem, NMEA on `/dev/ttyUSB1`, managed by `gpsd`
 
-### Connecting to Pi
+### First-Time Setup (from dev machine)
 ```bash
-# SSH into Pi
-ssh yurei@10.0.0.229
-# Password: password
+# Full provisioning: installs gpsd, configures GPS, builds and deploys camera
+./scripts/pi-setup.sh [PI_HOST] [PI_USER] [PI_PASSWORD]
 
-# SSH with password automation (for scripts)
-sshpass -p "password" ssh yurei@10.0.0.229
+# Defaults: 10.0.0.229  yurei  password
+./scripts/pi-setup.sh
 ```
 
-### Build & Deploy Camera
+### Quick Deploy (after code changes)
 ```bash
-# Cross-compile for Pi (aarch64)
-cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera
+# Build, stop old camera, deploy new binary
+./scripts/pi-deploy.sh
+```
 
-# Deploy to Pi
+### Manual Commands
+```bash
+# SSH into Pi
+sshpass -p "password" ssh yurei@10.0.0.229
+
+# Cross-compile and deploy manually
+cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera
 sshpass -p "password" scp -o StrictHostKeyChecking=no \
   target/aarch64-unknown-linux-gnu/release/kodama-camera \
   yurei@10.0.0.229:~/kodama/
@@ -92,6 +99,7 @@ sshpass -p "password" ssh yurei@10.0.0.229 \
   # or
   ssh yurei@10.0.0.229 "sudo pkill -f '/usr/local/bin/yurei'"
   ```
+- GPS requires `gpsd` service running with `/dev/ttyUSB1` and GPS enabled on the SIM7600 modem via ModemManager
 
 ## Architecture
 
