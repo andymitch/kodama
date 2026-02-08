@@ -18,6 +18,8 @@ use kodama_relay::{
     CommandSender, CommandStream, ClientCommandStream,
 };
 
+use crate::rate_limit::{ConnectionRateLimiter, RateCheck, RateLimitConfig};
+
 /// Role of a connected peer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerRole {
@@ -89,6 +91,8 @@ struct RouterInner {
     connection_generation: AtomicU64,
     /// Command channels to cameras (keyed by camera PublicKey)
     camera_commands: RwLock<HashMap<PublicKey, Arc<CameraCommandState>>>,
+    /// Per-connection rate limiting config
+    rate_limit_config: RateLimitConfig,
 }
 
 /// State for sending commands to a specific camera and receiving responses
@@ -149,6 +153,7 @@ impl Router {
                 stats: AtomicRouterStats::new(),
                 connection_generation: AtomicU64::new(0),
                 camera_commands: RwLock::new(HashMap::new()),
+                rate_limit_config: RateLimitConfig::default(),
             }),
         }
     }
@@ -234,19 +239,49 @@ impl Router {
         receiver: FrameReceiver,
     ) -> Result<()> {
         let generation = self.register_peer(remote, PeerRole::Camera).await;
+        let limiter = ConnectionRateLimiter::new(self.inner.rate_limit_config.clone());
+        let mut frames_since_abuse_check: u32 = 0;
         info!(camera = %remote, "Camera stream opened");
 
         // Receive frames and broadcast
         loop {
             match receiver.recv().await {
                 Ok(Some(frame)) => {
-                    debug!(
-                        source = ?frame.source,
-                        keyframe = frame.flags.is_keyframe(),
-                        len = frame.payload.len(),
-                        "Received frame from camera"
-                    );
-                    self.broadcast_frame(frame).await;
+                    let payload_len = frame.payload.len();
+
+                    // Rate limit check (lock-free hot path)
+                    if limiter.check_frame(&frame.channel, payload_len) == RateCheck::Dropped {
+                        if limiter.should_log_drop() {
+                            warn!(
+                                camera = %remote,
+                                dropped = limiter.frames_dropped(),
+                                "Rate limit: dropping frames from camera"
+                            );
+                        }
+                    } else {
+                        debug!(
+                            source = ?frame.source,
+                            keyframe = frame.flags.is_keyframe(),
+                            len = payload_len,
+                            "Received frame from camera"
+                        );
+                        self.broadcast_frame(frame).await;
+                        limiter.frame_sent(payload_len);
+                    }
+
+                    // Periodic abuse check (~1Hz, piggyback on frame arrival)
+                    frames_since_abuse_check += 1;
+                    if frames_since_abuse_check >= 30 {
+                        frames_since_abuse_check = 0;
+                        if limiter.tick_abuse_check() {
+                            warn!(
+                                camera = %remote,
+                                dropped = limiter.frames_dropped(),
+                                "Disconnecting camera: sustained rate limit abuse"
+                            );
+                            break;
+                        }
+                    }
                 }
                 Ok(None) => {
                     info!(camera = %remote, "Camera stream closed");
@@ -270,19 +305,49 @@ impl Router {
 
         // Accept the frame stream from the camera
         let receiver = conn.accept_frame_stream().await?;
+        let limiter = ConnectionRateLimiter::new(self.inner.rate_limit_config.clone());
+        let mut frames_since_abuse_check: u32 = 0;
         info!(camera = %remote, "Camera stream opened");
 
         // Receive frames and broadcast
         loop {
             match receiver.recv().await {
                 Ok(Some(frame)) => {
-                    debug!(
-                        source = ?frame.source,
-                        keyframe = frame.flags.is_keyframe(),
-                        len = frame.payload.len(),
-                        "Received frame from camera"
-                    );
-                    self.broadcast_frame(frame).await;
+                    let payload_len = frame.payload.len();
+
+                    // Rate limit check (lock-free hot path)
+                    if limiter.check_frame(&frame.channel, payload_len) == RateCheck::Dropped {
+                        if limiter.should_log_drop() {
+                            warn!(
+                                camera = %remote,
+                                dropped = limiter.frames_dropped(),
+                                "Rate limit: dropping frames from camera"
+                            );
+                        }
+                    } else {
+                        debug!(
+                            source = ?frame.source,
+                            keyframe = frame.flags.is_keyframe(),
+                            len = payload_len,
+                            "Received frame from camera"
+                        );
+                        self.broadcast_frame(frame).await;
+                        limiter.frame_sent(payload_len);
+                    }
+
+                    // Periodic abuse check (~1Hz, piggyback on frame arrival)
+                    frames_since_abuse_check += 1;
+                    if frames_since_abuse_check >= 30 {
+                        frames_since_abuse_check = 0;
+                        if limiter.tick_abuse_check() {
+                            warn!(
+                                camera = %remote,
+                                dropped = limiter.frames_dropped(),
+                                "Disconnecting camera: sustained rate limit abuse"
+                            );
+                            break;
+                        }
+                    }
                 }
                 Ok(None) => {
                     info!(camera = %remote, "Camera stream closed");
