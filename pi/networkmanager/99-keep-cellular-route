@@ -1,0 +1,28 @@
+#!/bin/bash
+# NetworkManager dispatcher: keep cellular default route when WiFi goes down.
+# NM removes the wwan0 default route when wlan0 drops, breaking cellular failover.
+# This script re-adds the route so the camera can reconnect over cellular.
+
+INTERFACE="$1"
+ACTION="$2"
+
+if [ "$INTERFACE" = "wlan0" ] && [ "$ACTION" = "down" ]; then
+    logger -t cellular-route "WiFi went down, ensuring cellular route exists"
+    WWAN_IP=$(ip -4 addr show wwan0 2>/dev/null | grep -oP 'inet \K[0-9.]+')
+    if [ -z "$WWAN_IP" ]; then
+        logger -t cellular-route "wwan0 has no IP, skipping"
+        exit 0
+    fi
+    GW=$(ip route show dev wwan0 2>/dev/null | grep -oP 'default via \K[0-9.]+')
+    if [ -z "$GW" ]; then
+        GW=$(nmcli -g IP4.GATEWAY con show cellular 2>/dev/null | head -1)
+    fi
+    if [ -n "$GW" ]; then
+        if ! ip route show default dev wwan0 2>/dev/null | grep -q .; then
+            ip route add default via "$GW" dev wwan0 metric 700 2>/dev/null
+            logger -t cellular-route "Added default route via $GW dev wwan0 metric 700"
+        else
+            logger -t cellular-route "Cellular default route already exists"
+        fi
+    fi
+fi

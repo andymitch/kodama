@@ -1,0 +1,12 @@
+[Unit]
+Description=Enable GPS on SIM7600 modem
+After=ModemManager.service
+Requires=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/kodama-enable-gps.sh
+
+[Install]
+WantedBy=multi-user.target

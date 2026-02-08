@@ -5,10 +5,17 @@ set -euo pipefail
 # Provisions a fresh Raspberry Pi for use as a Kodama camera node.
 # Run this FROM the development machine (not on the Pi itself).
 #
+# All config files deployed to the Pi live in the repo under pi/:
+#   pi/gpsd.conf                              → /etc/default/gpsd
+#   pi/kodama-enable-gps.sh                   → /usr/local/bin/kodama-enable-gps.sh
+#   pi/systemd/kodama-gps.service             → /etc/systemd/system/kodama-gps.service
+#   pi/networkmanager/no-connectivity-check.conf → /etc/NetworkManager/conf.d/
+#   pi/networkmanager/99-keep-cellular-route   → /etc/NetworkManager/dispatcher.d/
+#
 # Prerequisites:
 #   - Pi accessible via SSH with known IP, user, and password
 #   - Pi running Debian 12+ (bookworm/trixie) with rpicam-vid available
-#   - SimTech SIM7600 USB modem connected (for GPS; optional)
+#   - SimTech SIM7600 USB modem connected (for GPS/cellular; optional)
 #
 # Usage:
 #   ./scripts/pi-setup.sh [PI_HOST] [PI_USER] [PI_PASSWORD]
@@ -21,6 +28,10 @@ PI_USER="${2:-yurei}"
 PI_PASSWORD="${3:-password}"
 PI_DEPLOY_DIR="/home/${PI_USER}/kodama"
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
+PI_DIR="${PROJECT_ROOT}/pi"
 
 echo "=== Kodama Pi Camera Setup ==="
 echo "  Host: ${PI_HOST}"
@@ -75,66 +86,45 @@ echo "  Installing gpsd, gpsd-clients..."
 pi_ssh "sudo apt-get update -qq && sudo apt-get install -y -qq gpsd gpsd-clients 2>&1 | tail -3"
 echo "  Done."
 
-# --- Step 4: Configure gpsd for SimTech SIM7600 GPS ---
+# --- Step 4: Configure NetworkManager ---
 echo ""
-echo "=== Step 4: Configure GPS (gpsd) ==="
+echo "=== Step 4: Configure NetworkManager ==="
+
+# Disable connectivity checking (prevents cellular modem cycling)
+pi_scp "${PI_DIR}/networkmanager/no-connectivity-check.conf" "/tmp/no-connectivity-check.conf"
+pi_ssh "sudo mv /tmp/no-connectivity-check.conf /etc/NetworkManager/conf.d/no-connectivity-check.conf"
+echo "  Installed no-connectivity-check.conf"
+
+# Install cellular route dispatcher (keeps wwan0 route when WiFi drops)
+pi_scp "${PI_DIR}/networkmanager/99-keep-cellular-route" "/tmp/99-keep-cellular-route"
+pi_ssh "sudo mv /tmp/99-keep-cellular-route /etc/NetworkManager/dispatcher.d/99-keep-cellular-route && sudo chmod +x /etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
+echo "  Installed 99-keep-cellular-route dispatcher"
+
+pi_ssh "sudo systemctl reload NetworkManager 2>/dev/null || sudo systemctl restart NetworkManager"
+echo "  NetworkManager reloaded."
+
+# --- Step 5: Configure GPS (gpsd + modem) ---
+echo ""
+echo "=== Step 5: Configure GPS (gpsd) ==="
 
 # Detect the NMEA GPS port (SimTech SIM7600 exposes GPS on ttyUSB1)
 GPS_PORT=$(pi_ssh "ls /dev/ttyUSB1 2>/dev/null && echo /dev/ttyUSB1 || echo ''")
 if [ -n "${GPS_PORT}" ]; then
     echo "  GPS serial port found: ${GPS_PORT}"
 
-    # Write gpsd config
-    pi_ssh "sudo tee /etc/default/gpsd > /dev/null" <<'GPSD_EOF'
-# Kodama GPS configuration
-# SimTech SIM7600 NMEA port
-DEVICES="/dev/ttyUSB1"
+    # Deploy gpsd config
+    pi_scp "${PI_DIR}/gpsd.conf" "/tmp/gpsd.conf"
+    pi_ssh "sudo mv /tmp/gpsd.conf /etc/default/gpsd"
+    echo "  Installed gpsd.conf"
 
-# -n: don't wait for a client to connect before polling
-GPSD_OPTIONS="-n"
+    # Deploy GPS enablement script
+    pi_scp "${PI_DIR}/kodama-enable-gps.sh" "/tmp/kodama-enable-gps.sh"
+    pi_ssh "sudo mv /tmp/kodama-enable-gps.sh /usr/local/bin/kodama-enable-gps.sh && sudo chmod +x /usr/local/bin/kodama-enable-gps.sh"
+    echo "  Installed kodama-enable-gps.sh"
 
-# Auto-detect USB GPS devices
-USBAUTO="true"
-GPSD_EOF
-
-    # Install GPS enablement script (runs at boot, survives reboots)
-    # ModemManager doesn't persist --location-enable-gps-* across reboots
-    echo "  Installing GPS boot service..."
-    pi_ssh "sudo tee /usr/local/bin/kodama-enable-gps.sh > /dev/null" <<'GPS_SCRIPT'
-#!/bin/bash
-# Wait for ModemManager to register the modem (up to 30s)
-for i in $(seq 1 30); do
-    mmcli -L 2>/dev/null | grep -q Modem && break
-    sleep 1
-done
-
-# Get modem index dynamically
-IDX=$(mmcli -L 2>/dev/null | grep -oP '/Modem/\K[0-9]+')
-if [ -z "$IDX" ]; then
-    echo "No modem found"
-    exit 1
-fi
-
-echo "Enabling GPS on modem $IDX"
-mmcli -m "$IDX" --location-enable-gps-nmea --location-enable-gps-raw
-GPS_SCRIPT
-    pi_ssh "sudo chmod +x /usr/local/bin/kodama-enable-gps.sh"
-
-    pi_ssh "sudo tee /etc/systemd/system/kodama-gps.service > /dev/null" <<'GPS_SERVICE'
-[Unit]
-Description=Enable GPS on SIM7600 modem
-After=ModemManager.service
-Requires=ModemManager.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/bin/kodama-enable-gps.sh
-
-[Install]
-WantedBy=multi-user.target
-GPS_SERVICE
-
+    # Deploy GPS systemd service
+    pi_scp "${PI_DIR}/systemd/kodama-gps.service" "/tmp/kodama-gps.service"
+    pi_ssh "sudo mv /tmp/kodama-gps.service /etc/systemd/system/kodama-gps.service"
     pi_ssh "sudo systemctl daemon-reload && sudo systemctl enable kodama-gps.service && sudo systemctl start kodama-gps.service"
     echo "  GPS boot service installed and started."
 
@@ -158,12 +148,10 @@ else
     echo "  Skipping GPS setup. Camera will run without GPS."
 fi
 
-# --- Step 5: Build and deploy camera binary ---
+# --- Step 6: Build and deploy camera binary ---
 echo ""
-echo "=== Step 5: Build and deploy camera binary ==="
+echo "=== Step 6: Build and deploy camera binary ==="
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 TARGET_BIN="${PROJECT_ROOT}/target/aarch64-unknown-linux-gnu/release/kodama-camera"
 
 echo "  Cross-compiling for aarch64..."
@@ -178,29 +166,17 @@ echo "  Deploying to Pi..."
 pi_scp "${TARGET_BIN}" "${PI_DEPLOY_DIR}/kodama-camera"
 echo "  Deployed."
 
-# --- Step 6: Create systemd service (optional) ---
-echo ""
-echo "=== Step 6: Create systemd service ==="
-echo "  To run as a service, set KODAMA_SERVER_KEY and run:"
-echo ""
-echo "    sshpass -p \"${PI_PASSWORD}\" ssh ${PI_USER}@${PI_HOST} \\"
-echo "      \"cd ${PI_DEPLOY_DIR} && \\"
-echo "       KODAMA_SERVER_KEY=<server_key> \\"
-echo "       KODAMA_KEY_PATH=${PI_DEPLOY_DIR}/camera.key \\"
-echo "       ./kodama-camera\""
-echo ""
-
 # --- Summary ---
+echo ""
 echo "=== Setup complete! ==="
 echo ""
-echo "To start the camera manually:"
-echo "  ssh ${PI_USER}@${PI_HOST}"
-echo "  cd ${PI_DEPLOY_DIR}"
-echo "  KODAMA_SERVER_KEY=<key> KODAMA_KEY_PATH=${PI_DEPLOY_DIR}/camera.key ./kodama-camera"
+echo "To start the camera:"
+echo "  sshpass -p \"${PI_PASSWORD}\" ssh ${PI_USER}@${PI_HOST} \\"
+echo "    \"cd ${PI_DEPLOY_DIR} && \\"
+echo "     KODAMA_SERVER_KEY=<server_key> \\"
+echo "     KODAMA_KEY_PATH=${PI_DEPLOY_DIR}/camera.key \\"
+echo "     ./kodama-camera\""
 echo ""
-echo "To deploy updates in the future:"
-echo "  cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera"
-echo "  sshpass -p \"${PI_PASSWORD}\" scp ${SSH_OPTS} \\"
-echo "    target/aarch64-unknown-linux-gnu/release/kodama-camera \\"
-echo "    ${PI_USER}@${PI_HOST}:${PI_DEPLOY_DIR}/"
+echo "To deploy updates:"
+echo "  ./scripts/pi-deploy.sh"
 echo ""
