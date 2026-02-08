@@ -301,7 +301,7 @@ mod tests {
         abr.current_tier = QualityTier::Medium;
         abr.last_change = Instant::now() - Duration::from_secs(10);
 
-        // 3.5 Mbps > High upgrade threshold (3.2 Mbps = 4M * 0.8)
+        // 3.5 Mbps > Medium upgrade threshold (1.8 Mbps = 2M * 0.9)
         abr.evaluate(3_500_000.0);
         std::thread::sleep(Duration::from_millis(220));
         let decision = abr.evaluate(3_500_000.0);
@@ -314,10 +314,10 @@ mod tests {
         abr.current_tier = QualityTier::Medium;
         abr.last_change = Instant::now() - Duration::from_secs(10);
 
-        // 2.5 Mbps < High upgrade threshold (3.2 Mbps) — not enough headroom
-        abr.evaluate(2_500_000.0);
+        // 1.5 Mbps < Medium upgrade threshold (1.8 Mbps = 2M * 0.9) — not enough throughput
+        abr.evaluate(1_500_000.0);
         std::thread::sleep(Duration::from_millis(220));
-        let decision = abr.evaluate(2_500_000.0);
+        let decision = abr.evaluate(1_500_000.0);
         assert_eq!(decision, AbrDecision::Hold);
         assert_eq!(abr.current_tier(), QualityTier::Medium);
     }
