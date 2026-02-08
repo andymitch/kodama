@@ -95,6 +95,14 @@ impl RelayConnection {
         Self { conn: Arc::new(conn) }
     }
 
+    /// Create a RelayConnection from a raw iroh Connection.
+    ///
+    /// Useful for integration tests that need direct addressing
+    /// without going through Relay's discovery-based connect.
+    pub fn from_connection(conn: Connection) -> Self {
+        Self::new(conn)
+    }
+
     /// Create a cheap clone of this connection handle.
     ///
     /// Both handles share the same underlying QUIC connection.

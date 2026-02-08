@@ -25,7 +25,8 @@ cargo build -p kodama-camera --features test-source  # With synthetic test sourc
 ```bash
 cargo test                         # All unit tests
 cargo test <name_substring>        # Single test by name
-./scripts/test-e2e.sh             # Full pipeline test
+cargo test -p kodama-server --test e2e  # E2E regression suite (real QUIC, no hardware)
+./scripts/test-e2e.sh             # Full pipeline test (builds release, needs display)
 ```
 
 ### Run
