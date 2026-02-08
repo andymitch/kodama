@@ -69,10 +69,10 @@ kodama/
 │   ├── kodama-client/         # CLI viewer
 │   ├── kodama-desktop/        # Tauri + SvelteKit desktop app
 │   └── kodama-mobile/         # Tauri + SvelteKit mobile app
+├── pi/                        # Pi system configs (deployed by scripts/pi.sh)
 └── scripts/
     ├── setup.sh               # Pin crypto dependencies
-    ├── pi-setup.sh            # First-time Pi provisioning
-    ├── pi-deploy.sh           # Quick rebuild and deploy to Pi
+    ├── pi.sh                  # Pi management (setup, deploy, wifi-off)
     └── test-e2e.sh            # End-to-end pipeline test
 ```
 
@@ -92,14 +92,15 @@ Channels: Video (0), Audio (1), Telemetry (2). Flags: KEYFRAME (0x01).
 Kodama runs on a Raspberry Pi Zero 2W with an IMX219 camera sensor.
 
 ```bash
-# First-time setup (installs deps, configures GPS, deploys)
-./scripts/pi-setup.sh
+# First-time setup (installs deps, configures GPS/cellular, deploys)
+./scripts/pi.sh setup
 
 # Quick deploy after code changes
-./scripts/pi-deploy.sh
-```
+./scripts/pi.sh deploy
 
-See [CLAUDE.md](CLAUDE.md) for detailed Pi configuration and manual commands.
+# Toggle WiFi off for cellular failover testing
+./scripts/pi.sh wifi-off 60
+```
 
 ## Environment Variables
 

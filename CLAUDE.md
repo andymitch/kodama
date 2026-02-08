@@ -60,20 +60,19 @@ cd apps/kodama-mobile && npm run tauri dev
 - **OS**: Debian 13 (trixie) with `rpicam-vid` (NOT `libcamera-vid`)
 - **GPS**: SimTech SIM7600G-H USB modem, NMEA on `/dev/ttyUSB1`, managed by `gpsd`
 
-### First-Time Setup (from dev machine)
+### Pi Management Script
 ```bash
-# Full provisioning: installs gpsd, configures GPS, builds and deploys camera
-./scripts/pi-setup.sh [PI_HOST] [PI_USER] [PI_PASSWORD]
+# Full provisioning (fresh Pi): installs deps, configures GPS/cellular, deploys
+./scripts/pi.sh setup [PI_HOST] [PI_USER] [PI_PASSWORD]
 
-# Defaults: 10.0.0.229  yurei  password
-./scripts/pi-setup.sh
+# Quick deploy after code changes
+./scripts/pi.sh deploy
+
+# Toggle WiFi off for cellular failover testing
+./scripts/pi.sh wifi-off 60
 ```
 
-### Quick Deploy (after code changes)
-```bash
-# Build, stop old camera, deploy new binary
-./scripts/pi-deploy.sh
-```
+System configs deployed to the Pi are in `pi/` (gpsd, NetworkManager, systemd).
 
 ### Manual Commands
 ```bash
@@ -99,7 +98,7 @@ sshpass -p "password" ssh yurei@10.0.0.229 \
   # or
   ssh yurei@10.0.0.229 "sudo pkill -f '/usr/local/bin/yurei'"
   ```
-- GPS requires `gpsd` service running with `/dev/ttyUSB1` and GPS enabled on the SIM7600 modem via ModemManager
+- GPS requires `gpsd` service running with `/dev/ttyUSB1` and GPS enabled on the SIM7600 modem via ModemManager (handled by `kodama-gps.service`)
 
 ## Architecture
 
