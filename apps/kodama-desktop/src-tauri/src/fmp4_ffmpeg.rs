@@ -32,6 +32,13 @@ pub struct Fmp4Muxer {
     stdin_tx: Option<Sender<Vec<u8>>>,
     stdout_rx: Option<Receiver<Bytes>>,
     init_sent: bool,
+    /// After reset, skip non-keyframes until we see SPS/PPS+IDR to avoid feeding
+    /// FFmpeg mid-stream data that it can't parse (causing it to exit immediately).
+    needs_keyframe: bool,
+    /// Accumulates FFmpeg output while waiting for complete init segment (ftyp+moov).
+    /// FFmpeg may split the init across multiple reads; without buffering, partial
+    /// data is lost and no init segment is ever emitted after a muxer reset.
+    pending_init: Vec<u8>,
 }
 
 impl Fmp4Muxer {
@@ -43,6 +50,8 @@ impl Fmp4Muxer {
             stdin_tx: None,
             stdout_rx: None,
             init_sent: false,
+            needs_keyframe: false,
+            pending_init: Vec::new(),
         }
     }
 
@@ -73,6 +82,7 @@ impl Fmp4Muxer {
 
         let stdin = child.stdin.take().context("Failed to get ffmpeg stdin")?;
         let stdout = child.stdout.take().context("Failed to get ffmpeg stdout")?;
+        let stderr = child.stderr.take();
 
         // Stdin writer thread
         let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>();
@@ -84,6 +94,27 @@ impl Fmp4Muxer {
                 }
             }
         });
+
+        // Stderr drain thread - prevents FFmpeg from blocking on stderr writes
+        if let Some(stderr) = stderr {
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stderr);
+                let mut buffer = vec![0u8; 4096];
+                loop {
+                    match reader.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let msg = String::from_utf8_lossy(&buffer[..n]);
+                            for line in msg.lines() {
+                                if !line.is_empty() {
+                                    tracing::warn!("FFmpeg stderr: {}", line);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         // Stdout reader thread with minimal buffering
         let (stdout_tx, stdout_rx) = mpsc::channel::<Bytes>();
@@ -111,7 +142,21 @@ impl Fmp4Muxer {
         Ok(())
     }
 
-    pub fn mux_frame(&mut self, payload: &[u8], _is_keyframe: bool, _timestamp_us: u64) -> MuxResult {
+    /// Kill the FFmpeg process and reset state so the next frame restarts fresh.
+    pub fn reset(&mut self) {
+        if let Some(mut child) = self.ffmpeg.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.stdin_tx = None;
+        self.stdout_rx = None;
+        self.init_sent = false;
+        self.needs_keyframe = true;
+        self.pending_init.clear();
+        tracing::info!("FFmpeg muxer reset");
+    }
+
+    pub fn mux_frame(&mut self, payload: &[u8], is_keyframe: bool, _timestamp_us: u64) -> MuxResult {
         let mut result = MuxResult {
             init_segment: None,
             codec: Some("avc1.640028".to_string()), // High profile placeholder
@@ -120,7 +165,17 @@ impl Fmp4Muxer {
             media_segment: None,
         };
 
-        // Start ffmpeg on first frame
+        // After reset, skip frames until we see a keyframe (SPS/PPS+IDR).
+        // FFmpeg can't parse mid-stream H.264 data and will exit immediately.
+        if self.needs_keyframe {
+            if !is_keyframe {
+                return result;
+            }
+            tracing::info!("FFmpeg got keyframe after reset, starting new muxer");
+            self.needs_keyframe = false;
+        }
+
+        // Start ffmpeg on first frame (or first keyframe after reset)
         if self.ffmpeg.is_none() {
             if let Err(e) = self.start_ffmpeg() {
                 tracing::error!("Failed to start ffmpeg: {}", e);
@@ -135,30 +190,67 @@ impl Fmp4Muxer {
             }
         }
 
+        // Check if FFmpeg process has exited
+        if let Some(ref mut child) = self.ffmpeg {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    tracing::warn!("FFmpeg process exited with status: {}", status);
+                    self.ffmpeg = None;
+                    self.stdin_tx = None;
+                    // Don't clear stdout_rx yet - drain remaining data first
+                }
+                Ok(None) => {} // Still running
+                Err(e) => tracing::warn!("Failed to check FFmpeg status: {}", e),
+            }
+        }
+
         // Read all available fMP4 output from ffmpeg
         if let Some(ref rx) = self.stdout_rx {
-            let mut combined = Vec::new();
             // Drain all available data
-            while let Ok(data) = rx.try_recv() {
-                combined.extend_from_slice(&data);
-            }
+            if !self.init_sent {
+                // Accumulate into pending_init buffer until we find the complete moov box
+                while let Ok(data) = rx.try_recv() {
+                    self.pending_init.extend_from_slice(&data);
+                }
 
-            if !combined.is_empty() {
-                // Parse fMP4 boxes to separate init from media segments
-                if !self.init_sent {
-                    // Look for moov box end to split init segment
-                    if let Some(moov_end) = find_box_end(&combined, b"moov") {
-                        result.init_segment = Some(combined[..moov_end].to_vec());
+                if !self.pending_init.is_empty() {
+                    tracing::info!("FFmpeg pending_init has {} bytes, checking for moov", self.pending_init.len());
+                    if let Some(moov_end) = find_box_end(&self.pending_init, b"moov") {
+                        result.init_segment = Some(self.pending_init[..moov_end].to_vec());
                         self.init_sent = true;
                         tracing::info!("FFmpeg init segment: {} bytes", moov_end);
 
-                        // Remaining data is media segment(s)
-                        if moov_end < combined.len() {
-                            result.media_segment = Some(combined[moov_end..].to_vec());
+                        // Discard media data that arrived with the init segment.
+                        // After a reset (reconnection), the first keyframe often
+                        // contains corrupt H.264 data from rpicam-vid startup,
+                        // which causes MSE decode errors. Subsequent frames are clean.
+                        if moov_end < self.pending_init.len() {
+                            tracing::info!("Discarding {} bytes of initial media data (may be corrupt)", self.pending_init.len() - moov_end);
+                        }
+                        self.pending_init.clear();
+                    } else {
+                        tracing::debug!("FFmpeg init pending: {} bytes so far, waiting for moov", self.pending_init.len());
+                    }
+                }
+            } else {
+                let mut combined = Vec::new();
+                loop {
+                    match rx.try_recv() {
+                        Ok(data) => combined.extend_from_slice(&data),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            tracing::warn!("FFmpeg stdout channel disconnected (process likely exited)");
+                            // Reset so next keyframe restarts FFmpeg
+                            self.ffmpeg = None;
+                            self.stdin_tx = None;
+                            self.stdout_rx = None;
+                            self.init_sent = false;
+                            self.needs_keyframe = true;
+                            break;
                         }
                     }
-                } else {
-                    // All data is media segments
+                }
+                if !combined.is_empty() {
                     result.media_segment = Some(combined);
                 }
             }

@@ -24,7 +24,7 @@ use iroh::PublicKey;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
 use kodama_core::{
@@ -309,6 +309,19 @@ async fn main() -> Result<()> {
     // Drop the original sender so combined_rx closes when all sources end
     drop(combined_tx);
 
+    // ── Network monitor ────────────────────────────────────────────────
+    // Polls the default route interface every 500ms. When it changes
+    // (e.g. wlan0 → wwan0 on WiFi dropout), immediately notifies iroh
+    // to rebind sockets and signals the send loop to break for reconnect.
+    let (net_change_tx, net_change_rx) = watch::channel(0u64);
+    {
+        let endpoint = relay.endpoint().endpoint().clone();
+        tokio::spawn(async move {
+            network_monitor(endpoint, net_change_tx).await;
+        });
+    }
+    let mut net_change_rx = net_change_rx;
+
     // ── Reconnection loop ──────────────────────────────────────────────
     // Captures keep running. On connection loss we reconnect and resume
     // reading from combined_rx. Exponential backoff: 1s → 2s → 4s … 30s.
@@ -322,6 +335,22 @@ async fn main() -> Result<()> {
     loop {
         attempt += 1;
 
+        // Wait for a default route to exist before trying to connect.
+        // After WiFi drops, it can take 10-30s for cellular to come up.
+        if get_default_interface().is_none() {
+            info!("No default route, waiting for network...");
+            let wait_start = Instant::now();
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if get_default_interface().is_some() {
+                    info!("Route appeared after {:.1}s", wait_start.elapsed().as_secs_f64());
+                    break;
+                }
+                // Drain frames to prevent backpressure while waiting
+                while combined_rx.try_recv().is_ok() {}
+            }
+        }
+
         // Notify iroh of potential network changes (e.g. WiFi → cellular)
         // so it re-scans interfaces, rebinds sockets, and reconnects to relays.
         relay.endpoint().endpoint().network_change().await;
@@ -333,19 +362,22 @@ async fn main() -> Result<()> {
         )
         .await
         {
-            Ok(()) => debug!("Relay online"),
+            Ok(()) => info!("Relay online after network_change"),
             Err(_) => warn!("Timed out waiting for relay (10s), trying connect anyway"),
         }
 
         info!("Connecting to server (attempt {})...", attempt);
 
         // ── Connect ────────────────────────────────────────────────────
+        // Let connect() run to completion without interrupting on route
+        // flaps. On cellular, NM cycles the modem frequently — restarting
+        // connect on every flap prevents the camera from ever connecting.
+        // The send loop below handles network changes instead.
         let conn = match relay.connect(config.server_key).await {
             Ok(c) => c,
             Err(e) => {
                 let delay = reconnect_delay(attempt);
                 warn!("Connection failed: {}. Retrying in {:.0}s", e, delay.as_secs_f64());
-                // Drain stale frames while waiting so captures don't block
                 drain_during_delay(&mut combined_rx, delay).await;
                 continue;
             }
@@ -387,13 +419,14 @@ async fn main() -> Result<()> {
             }
         });
 
-        // Reset ABR to High for the fresh connection
+        // Start ABR at Minimum tier — avoids overwhelming a slow link
+        // (e.g. cellular). ABR will upgrade once throughput is proven.
         let mut throughput_tracker = ThroughputTracker::new(Duration::from_secs(3));
-        let mut abr = AbrController::new(AbrConfig::default());
+        let mut abr = AbrController::new_at(AbrConfig::default(), QualityTier::Minimum);
         let mut last_abr_eval = Instant::now();
         if abr_enabled {
             if let Some(ref cmd_tx) = bitrate_cmd_tx {
-                let _ = cmd_tx.try_send(QualityTier::High.bitrate_bps());
+                let _ = cmd_tx.try_send(QualityTier::Minimum.bitrate_bps());
             }
         }
 
@@ -407,7 +440,24 @@ async fn main() -> Result<()> {
         let session_connected = Instant::now();
         let mut connection_lost = false;
 
-        while let Some(msg) = combined_rx.recv().await {
+        // Mark current network state as seen — only react to NEW changes
+        net_change_rx.borrow_and_update();
+
+        loop {
+            // Wait for either a frame or a network change signal
+            let msg = tokio::select! {
+                msg = combined_rx.recv() => {
+                    match msg {
+                        Some(m) => m,
+                        None => break, // channel closed, all captures ended
+                    }
+                }
+                Ok(_) = net_change_rx.changed() => {
+                    warn!("Network interface changed, breaking connection for fast reconnect");
+                    connection_lost = true;
+                    break;
+                }
+            };
             let timestamp_us = session_start.elapsed().as_micros() as u64;
 
             let frame = match msg {
@@ -434,9 +484,28 @@ async fn main() -> Result<()> {
             let frame_bytes = frame.payload.len();
             session_bytes += frame_bytes as u64;
 
-            // Send frame — break on error to trigger reconnect
-            if let Err(e) = sender.send(&frame).await {
-                warn!("Send failed: {}. Will reconnect.", e);
+            // Send frame — race against network changes AND a 5s timeout.
+            // Dead QUIC connections can hang for 30s+ without a timeout.
+            let send_ok = tokio::select! {
+                result = sender.send(&frame) => {
+                    match result {
+                        Ok(()) => true,
+                        Err(e) => {
+                            warn!("Send failed: {}. Will reconnect.", e);
+                            false
+                        }
+                    }
+                }
+                Ok(_) = net_change_rx.changed() => {
+                    warn!("Network changed during send, breaking for fast reconnect");
+                    false
+                }
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                    warn!("Send timed out (5s), connection likely dead");
+                    false
+                }
+            };
+            if !send_ok {
                 connection_lost = true;
                 break;
             }
@@ -776,4 +845,71 @@ async fn gather_status() -> Result<CameraStatus> {
         disk_used: None,
         disk_total: None,
     })
+}
+
+/// Monitor the default network interface and notify on changes.
+/// Reads /proc/net/route every 500ms (Linux-only; no-op on other platforms).
+///
+/// Only signals when the route settles on a DIFFERENT real interface
+/// (e.g. wlan0→wwan0 or wwan0→wlan0). Never signals for drops to None —
+/// the send loop's 5s timeout handles dead connections instead.
+/// This prevents NM's cellular route cycling from breaking active connections.
+async fn network_monitor(_endpoint: iroh::Endpoint, change_tx: watch::Sender<u64>) {
+    let mut last_signaled = get_default_interface();
+    let mut generation = 0u64;
+    info!("Network monitor started, default interface: {:?}", last_signaled);
+
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let current = get_default_interface();
+
+        if current == last_signaled {
+            continue;
+        }
+
+        // Route changed — only care about changes to a DIFFERENT real interface.
+        // Drops to None are handled by the send loop's timeout.
+        if current.is_none() {
+            // Route dropped to None. Don't signal — it may come back (NM cycling).
+            // Just update tracking so we detect when a NEW interface appears.
+            continue;
+        }
+
+        // A real interface appeared that differs from last_signaled.
+        // Quick 1s debounce to avoid acting on transient flaps.
+        warn!("Default route change: {:?} → {:?}, debouncing 1s...", last_signaled, current);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let settled = get_default_interface();
+
+        if settled == last_signaled {
+            debug!("Route settled back to {:?}, ignoring", last_signaled);
+            continue;
+        }
+
+        if settled.is_none() {
+            // Flapped away during debounce
+            debug!("Route went None during debounce, ignoring");
+            continue;
+        }
+
+        // Definitive change to a different real interface
+        warn!("Default route settled: {:?} → {:?}", last_signaled, settled);
+        last_signaled = settled;
+        generation += 1;
+        let _ = change_tx.send(generation);
+    }
+}
+
+/// Read the default route interface from /proc/net/route (Linux).
+/// Returns None on non-Linux or if no default route exists.
+fn get_default_interface() -> Option<String> {
+    let content = std::fs::read_to_string("/proc/net/route").ok()?;
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        // Destination 00000000 = default route
+        if fields.len() >= 2 && fields[1] == "00000000" {
+            return Some(fields[0].to_string());
+        }
+    }
+    None
 }

@@ -18,6 +18,7 @@
   let droppedSegments = 0;
   let unlistenInit: (() => void) | null = null;
   let unlistenSegment: (() => void) | null = null;
+  let liveEdgeTimer: ReturnType<typeof setInterval> | null = null;
 
   function base64ToArrayBuffer(base64: string): ArrayBuffer {
     const binary = atob(base64);
@@ -86,12 +87,21 @@
       }
     }
 
-    // Auto-resume if paused but buffer is available (low latency - only need ~2 frames ahead)
-    if (videoEl && videoEl.paused && playStarted && sourceBuffer.buffered.length > 0) {
+    // Live edge management: keep playback close to buffer end
+    if (videoEl && playStarted && sourceBuffer.buffered.length > 0) {
       const currentTime = videoEl.currentTime;
       const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-      if (bufferedEnd - currentTime > 0.1) {  // ~3 frames at 30fps, very low latency
-        console.log('[VideoPlayer] Auto-resuming paused video, buffer ahead:', (bufferedEnd - currentTime).toFixed(2), 's');
+      const behind = bufferedEnd - currentTime;
+
+      // If too far behind live edge, seek forward (handles both paused and waiting/stalled states)
+      if (behind > 2) {
+        videoEl.currentTime = bufferedEnd - 0.3;
+        console.log('[VideoPlayer] Seeking to live edge, was', behind.toFixed(2), 's behind');
+      }
+
+      // Auto-resume if paused
+      if (videoEl.paused && behind > 0.1) {
+        console.log('[VideoPlayer] Auto-resuming paused video, buffer ahead:', behind.toFixed(2), 's');
         videoEl.play().catch(err => console.warn('[VideoPlayer] Auto-resume failed:', err));
       }
     }
@@ -141,7 +151,30 @@
     unlistenInit = await listen<VideoInitEvent>('video-init', (event) => {
       console.log('[VideoPlayer] Initializing:', event.payload.width, 'x', event.payload.height, event.payload.codec);
       if (event.payload.source_id !== sourceId) return;
-      if (initialized || initInProgress) return;
+      if (initInProgress) return;
+
+      // Tear down old MediaSource on reinit (camera reconnection)
+      if (initialized) {
+        console.log('[VideoPlayer] Reinitializing (camera reconnected)');
+        if (sourceBuffer) {
+          try { sourceBuffer.removeEventListener('updateend', onUpdateEnd); } catch {}
+          sourceBuffer = null;
+        }
+        if (mediaSource && mediaSource.readyState === 'open') {
+          try { mediaSource.endOfStream(); } catch {}
+        }
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          objectUrl = '';
+        }
+        initialized = false;
+        initInProgress = false;
+        playStarted = false;
+        queue = [];
+        mediaSegmentsAppended = 0;
+        appendErrorCount = 0;
+        if (liveEdgeTimer) { clearInterval(liveEdgeTimer); liveEdgeTimer = null; }
+      }
 
       initInProgress = true;
 
@@ -169,7 +202,23 @@
           sourceBuffer.addEventListener('error', (e) => console.error('[VideoPlayer] SourceBuffer error:', e));
           appendBuffer(initData);
           initialized = true;
+          initInProgress = false;
           console.log('[VideoPlayer] Ready to play');
+
+          // Periodic live edge check - catches stalls that events miss
+          if (liveEdgeTimer) clearInterval(liveEdgeTimer);
+          liveEdgeTimer = setInterval(() => {
+            if (!videoEl || !sourceBuffer || sourceBuffer.buffered.length === 0) return;
+            const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+            const behind = bufferedEnd - videoEl.currentTime;
+            if (behind > 3) {
+              console.log('[VideoPlayer] Live edge timer: seeking forward, was', behind.toFixed(2), 's behind');
+              videoEl.currentTime = bufferedEnd - 0.3;
+              if (videoEl.paused) {
+                videoEl.play().catch(() => {});
+              }
+            }
+          }, 1000);
         } catch (e) {
           console.error('[VideoPlayer] Failed to initialize:', e);
         }
@@ -197,6 +246,7 @@
   onDestroy(() => {
     unlistenInit?.();
     unlistenSegment?.();
+    if (liveEdgeTimer) { clearInterval(liveEdgeTimer); liveEdgeTimer = null; }
     if (objectUrl) {
       URL.revokeObjectURL(objectUrl);
     }
@@ -213,14 +263,26 @@
   playsinline
   onerror={(e) => console.error('[VideoPlayer] Error:', videoEl?.error)}
   onplaying={() => console.log('[VideoPlayer] Playing', videoEl?.videoWidth, 'x', videoEl?.videoHeight)}
-  onpause={(e) => {
-    // Auto-resume for live streaming (low latency)
+  onpause={() => {
     if (videoEl && sourceBuffer && sourceBuffer.buffered.length > 0) {
       const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
       if (bufferedEnd - videoEl.currentTime > 0.1) {
-        console.log('[VideoPlayer] Auto-resuming playback');
+        console.log('[VideoPlayer] Auto-resuming from pause');
         videoEl.play().catch(err => console.error('[VideoPlayer] Auto-resume failed:', err));
       }
     }
+  }}
+  onwaiting={() => {
+    if (videoEl && sourceBuffer && sourceBuffer.buffered.length > 0) {
+      const bufferedEnd = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+      const behind = bufferedEnd - videoEl.currentTime;
+      if (behind > 0.5) {
+        console.log('[VideoPlayer] Stalled, seeking to live edge, was', behind.toFixed(2), 's behind');
+        videoEl.currentTime = bufferedEnd - 0.1;
+      }
+    }
+  }}
+  onstalled={() => {
+    console.log('[VideoPlayer] Stalled event, currentTime:', videoEl?.currentTime?.toFixed(2), 'buffered:', getBufferedInfo());
   }}
 ></video>

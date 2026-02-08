@@ -20,12 +20,14 @@
   let cameras: Array<{ id: string; name: string; connected: boolean }> = $state([]);
   let error: string | null = $state(null);
 
-  const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
-
   let unlistenCamera: (() => void) | null = null;
 
+  function isTauri(): boolean {
+    return typeof window !== 'undefined' && '__TAURI__' in window;
+  }
+
   async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-    if (!isTauri) {
+    if (!isTauri()) {
       console.warn('Tauri not available, running in browser mode');
       throw new Error('Tauri not available');
     }
@@ -107,7 +109,7 @@
   }
 
   onMount(async () => {
-    if (!isTauri) return;
+    if (!isTauri()) return;
 
     const { listen } = await import('@tauri-apps/api/event');
 

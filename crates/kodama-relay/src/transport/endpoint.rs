@@ -4,7 +4,7 @@ use anyhow::Result;
 use iroh::endpoint::{Connection, Endpoint, RelayMode};
 use iroh::{PublicKey, SecretKey};
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 use kodama_core::ALPN;
 
@@ -75,10 +75,19 @@ impl KodamaEndpoint {
 
     /// Accept an incoming connection
     ///
-    /// Returns None if the endpoint is closed.
+    /// Returns None only if the endpoint is closed.
+    /// Transient handshake failures are logged and retried.
     pub async fn accept(&self) -> Option<Connection> {
-        let incoming = self.endpoint.accept().await?;
-        incoming.await.ok()
+        loop {
+            let incoming = self.endpoint.accept().await?;
+            match incoming.await {
+                Ok(conn) => return Some(conn),
+                Err(e) => {
+                    warn!("Incoming connection handshake failed: {e}");
+                    continue;
+                }
+            }
+        }
     }
 
     /// Close the endpoint gracefully

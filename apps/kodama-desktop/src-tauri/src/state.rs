@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,10 @@ pub struct CameraInfo {
     pub name: String,
     pub connected: bool,
     pub last_frame_time: Option<u64>,
+    /// Generation counter to prevent stale disconnection handlers from
+    /// removing a newer connection's entry (same race as router peer map).
+    #[serde(skip)]
+    pub generation: u64,
 }
 
 /// Storage configuration
@@ -98,6 +103,7 @@ pub struct AppState {
     pub client: RwLock<Option<Arc<ClientState>>>,
     pub settings: RwLock<AppSettings>,
     pub cameras: Arc<RwLock<Vec<CameraInfo>>>,
+    pub camera_generation: Arc<AtomicU64>,
     pub accept_task: RwLock<Option<JoinHandle<()>>>,
     pub receive_task: RwLock<Option<JoinHandle<()>>>,
 }
@@ -110,6 +116,7 @@ impl AppState {
             client: RwLock::new(None),
             settings: RwLock::new(AppSettings::default()),
             cameras: Arc::new(RwLock::new(Vec::new())),
+            camera_generation: Arc::new(AtomicU64::new(0)),
             accept_task: RwLock::new(None),
             receive_task: RwLock::new(None),
         }

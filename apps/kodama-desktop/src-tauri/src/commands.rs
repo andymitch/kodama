@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, State};
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -52,6 +53,7 @@ pub struct StorageStats {
 struct SourceMuxState {
     muxer: Fmp4Muxer,
     last_audio_emit: std::time::Instant,
+    last_video_time: std::time::Instant,
     telemetry_state: TelemetryData,
 }
 
@@ -70,8 +72,18 @@ fn process_frame(
                 .or_insert_with(|| SourceMuxState {
                     muxer: Fmp4Muxer::new(),
                     last_audio_emit: std::time::Instant::now(),
+                    last_video_time: std::time::Instant::now(),
                     telemetry_state: TelemetryData::default(),
                 });
+
+            // Detect camera reconnection: if >2s gap, reset muxer so a fresh
+            // init segment is emitted on the next keyframe.
+            let gap = mux_state.last_video_time.elapsed();
+            if gap.as_secs() >= 2 {
+                tracing::info!(source = %frame.source, gap_ms = gap.as_millis(), "Camera reconnected, resetting muxer");
+                mux_state.muxer.reset();
+            }
+            mux_state.last_video_time = std::time::Instant::now();
 
             let result = mux_state.muxer.mux_frame(
                 &frame.payload,
@@ -124,8 +136,6 @@ fn process_frame(
                         segment,
                     ),
                 });
-            } else if frame.flags.is_keyframe() {
-                tracing::warn!("Keyframe but no media segment! This shouldn't happen.");
             }
         }
         Channel::Audio => {
@@ -134,6 +144,7 @@ fn process_frame(
                 .or_insert_with(|| SourceMuxState {
                     muxer: Fmp4Muxer::new(),
                     last_audio_emit: std::time::Instant::now(),
+                    last_video_time: std::time::Instant::now(),
                     telemetry_state: TelemetryData::default(),
                 });
             // Emit audio level (throttled to ~10/sec)
@@ -164,6 +175,7 @@ fn process_frame(
                     .or_insert_with(|| SourceMuxState {
                         muxer: Fmp4Muxer::new(),
                         last_audio_emit: std::time::Instant::now(),
+                        last_video_time: std::time::Instant::now(),
                         telemetry_state: TelemetryData::default(),
                     });
 
@@ -299,6 +311,7 @@ pub async fn start_server(
 
     // Spawn connection accept loop
     let cameras_state = state.cameras.clone();
+    let camera_gen = state.camera_generation.clone();
     let accept_task = tokio::spawn(async move {
         // Subscribe to broadcast for local frame processing (video mux, audio, telemetry)
         let mut local_rx = server_state.handle.subscribe();
@@ -321,17 +334,34 @@ pub async fn start_server(
             }
         });
 
+        // Track active peer handlers so we can abort old ones on reconnect.
+        // When a peer reconnects, the old QUIC connection lingers for 30s (idle timeout),
+        // and its cleanup can kill the new connection. Aborting immediately prevents this.
+        let peer_handlers: Arc<tokio::sync::Mutex<HashMap<iroh::PublicKey, tokio::task::JoinHandle<()>>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
         loop {
             match server_state.relay.accept().await {
                 Some(conn) => {
                     let remote = conn.remote_public_key();
                     tracing::info!("New connection from: {}", remote);
 
+                    // Abort old handler for this peer (prevents 30s QUIC timeout from killing new connection)
+                    {
+                        let mut handlers = peer_handlers.lock().await;
+                        if let Some(old_handle) = handlers.remove(&remote) {
+                            tracing::info!(peer = %remote, "Aborting old handler (peer reconnected)");
+                            old_handle.abort();
+                        }
+                    }
+
                     let router = server_state.router.clone();
                     let app_clone = app.clone();
                     let cameras: Arc<RwLock<Vec<CameraInfo>>> = cameras_state.clone();
+                    let gen_counter: Arc<AtomicU64> = camera_gen.clone();
+                    let handlers_clone = peer_handlers.clone();
 
-                    tokio::spawn(async move {
+                    let handle = tokio::spawn(async move {
                         let detect_timeout = Duration::from_secs(2);
 
                         tokio::select! {
@@ -345,14 +375,20 @@ pub async fn start_server(
                                         );
                                         let source_str = format!("{}", source_id);
 
-                                        // Add to cameras list
+                                        // Assign a generation to this connection so stale
+                                        // disconnect handlers don't remove a newer entry.
+                                        let gen = gen_counter.fetch_add(1, Ordering::Relaxed);
+
+                                        // Add to cameras list (remove any stale entry first)
                                         {
                                             let mut cams = cameras.write().await;
+                                            cams.retain(|c| c.id != source_str);
                                             cams.push(CameraInfo {
                                                 id: source_str.clone(),
                                                 name: format!("Camera {}", &source_str[..8]),
                                                 connected: true,
                                                 last_frame_time: None,
+                                                generation: gen,
                                             });
                                         }
 
@@ -360,7 +396,7 @@ pub async fn start_server(
                                             source_id: source_str.clone(),
                                             connected: true,
                                         }) {
-                                            Ok(_) => tracing::info!("Emitted camera-event connected for {}", &source_str[..8]),
+                                            Ok(_) => tracing::info!(gen, "Emitted camera-event connected for {}", &source_str[..8]),
                                             Err(e) => tracing::error!("Failed to emit camera-event: {}", e),
                                         }
 
@@ -369,16 +405,23 @@ pub async fn start_server(
                                             tracing::warn!(peer = %remote, error = %e, "Camera handler error");
                                         }
 
-                                        // Camera disconnected - remove from list
+                                        // Camera disconnected - only remove if generation matches
+                                        // (a newer connection may have already replaced this entry)
                                         {
                                             let mut cams = cameras.write().await;
-                                            cams.retain(|c| c.id != source_str);
+                                            let had_entry = cams.len();
+                                            cams.retain(|c| !(c.id == source_str && c.generation == gen));
+                                            if cams.len() < had_entry {
+                                                // We actually removed the entry, emit disconnect
+                                                drop(cams);
+                                                let _ = app_clone.emit("camera-event", CameraEvent {
+                                                    source_id: source_str,
+                                                    connected: false,
+                                                });
+                                            } else {
+                                                tracing::info!(gen, "Stale disconnect for camera {}, newer connection exists", &source_str[..8]);
+                                            }
                                         }
-
-                                        let _ = app_clone.emit("camera-event", CameraEvent {
-                                            source_id: source_str,
-                                            connected: false,
-                                        });
                                     }
                                     Err(e) => {
                                         tracing::warn!(peer = %remote, error = %e, "Failed to accept stream");
@@ -392,7 +435,13 @@ pub async fn start_server(
                                 }
                             }
                         }
+
+                        // Clean up handler entry on exit
+                        handlers_clone.lock().await.remove(&remote);
                     });
+
+                    // Store the handle so we can abort it if the peer reconnects
+                    peer_handlers.lock().await.insert(remote, handle);
                 }
                 None => {
                     tracing::info!("Relay accept returned None, stopping accept loop");
@@ -533,6 +582,7 @@ pub async fn connect_to_server(
                                 name: format!("Camera {}", &source_str[..8]),
                                 connected: true,
                                 last_frame_time: None,
+                                generation: 0, // Client mode doesn't have reconnection race
                             });
                         }
 

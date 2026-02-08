@@ -132,6 +132,17 @@ impl AbrController {
         }
     }
 
+    /// Create a new controller starting at the given tier.
+    pub fn new_at(config: AbrConfig, tier: QualityTier) -> Self {
+        Self {
+            current_tier: tier,
+            downgrade_pressure_since: None,
+            upgrade_pressure_since: None,
+            last_change: Instant::now(),
+            config,
+        }
+    }
+
     pub fn current_tier(&self) -> QualityTier {
         self.current_tier
     }
@@ -187,9 +198,11 @@ impl AbrController {
             // No congestion, reset downgrade pressure
             self.downgrade_pressure_since = None;
 
-            // Check upgrade: throughput above next tier's upgrade threshold
+            // Check upgrade: throughput sustains near current bitrate, meaning
+            // the link has headroom. We use 90% of current tier as threshold
+            // since we can't measure throughput above what we're sending.
             if let Some(higher) = self.current_tier.higher() {
-                let upgrade_thresh = higher.upgrade_threshold_bps();
+                let upgrade_thresh = self.current_tier.bitrate_bps() as f64 * 0.9;
 
                 if throughput_bps >= upgrade_thresh {
                     let pressure_start = *self.upgrade_pressure_since.get_or_insert(now);
