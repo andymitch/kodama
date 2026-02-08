@@ -14,5 +14,5 @@ pub const DEFAULT_SERVER_PORT: u16 = 7879;
 /// Frame header size in bytes (source + channel + flags + timestamp)
 pub const FRAME_HEADER_SIZE: usize = 8 + 1 + 1 + 8; // 18 bytes
 
-/// Maximum frame payload size (16 MB, generous for high-bitrate video)
-pub const MAX_FRAME_PAYLOAD_SIZE: usize = 16 * 1024 * 1024;
+/// Maximum frame payload size (2 MB, sufficient for 4K H.264 keyframes)
+pub const MAX_FRAME_PAYLOAD_SIZE: usize = 2 * 1024 * 1024;
