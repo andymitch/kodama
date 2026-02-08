@@ -97,15 +97,46 @@ GPSD_OPTIONS="-n"
 USBAUTO="true"
 GPSD_EOF
 
-    # Enable GPS on the SIM7600 modem via ModemManager
-    echo "  Enabling GPS on SIM7600 modem..."
-    MODEM_IDX=$(pi_ssh "sudo mmcli -L 2>/dev/null | grep -oP '/Modem/\K[0-9]+' || echo ''")
-    if [ -n "${MODEM_IDX}" ]; then
-        pi_ssh "sudo mmcli -m ${MODEM_IDX} --location-enable-gps-nmea --location-enable-gps-raw 2>&1 || true"
-        echo "  GPS enabled on modem index ${MODEM_IDX}."
-    else
-        echo "  WARNING: No modem found in ModemManager. GPS may not work."
-    fi
+    # Install GPS enablement script (runs at boot, survives reboots)
+    # ModemManager doesn't persist --location-enable-gps-* across reboots
+    echo "  Installing GPS boot service..."
+    pi_ssh "sudo tee /usr/local/bin/kodama-enable-gps.sh > /dev/null" <<'GPS_SCRIPT'
+#!/bin/bash
+# Wait for ModemManager to register the modem (up to 30s)
+for i in $(seq 1 30); do
+    mmcli -L 2>/dev/null | grep -q Modem && break
+    sleep 1
+done
+
+# Get modem index dynamically
+IDX=$(mmcli -L 2>/dev/null | grep -oP '/Modem/\K[0-9]+')
+if [ -z "$IDX" ]; then
+    echo "No modem found"
+    exit 1
+fi
+
+echo "Enabling GPS on modem $IDX"
+mmcli -m "$IDX" --location-enable-gps-nmea --location-enable-gps-raw
+GPS_SCRIPT
+    pi_ssh "sudo chmod +x /usr/local/bin/kodama-enable-gps.sh"
+
+    pi_ssh "sudo tee /etc/systemd/system/kodama-gps.service > /dev/null" <<'GPS_SERVICE'
+[Unit]
+Description=Enable GPS on SIM7600 modem
+After=ModemManager.service
+Requires=ModemManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/kodama-enable-gps.sh
+
+[Install]
+WantedBy=multi-user.target
+GPS_SERVICE
+
+    pi_ssh "sudo systemctl daemon-reload && sudo systemctl enable kodama-gps.service && sudo systemctl start kodama-gps.service"
+    echo "  GPS boot service installed and started."
 
     # Start gpsd
     pi_ssh "sudo systemctl restart gpsd && sudo systemctl enable gpsd"
