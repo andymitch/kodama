@@ -54,9 +54,7 @@ check_connection() {
 
 stop_camera() {
     echo "Stopping camera..."
-    pi_ssh "sudo systemctl stop yurei 2>/dev/null || true"
     pi_ssh "sudo pkill -f '[k]odama-camera' 2>/dev/null || true"
-    pi_ssh "sudo pkill -f '/usr/local/bin/yurei' 2>/dev/null || true"
 }
 
 build_and_deploy() {

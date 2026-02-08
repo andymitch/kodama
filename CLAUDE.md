@@ -92,12 +92,6 @@ sshpass -p "password" ssh yurei@10.0.0.229 \
 
 ### Notes
 - Use `KODAMA_KEY_PATH=/home/yurei/kodama/camera.key` (default `/var/lib/kodama/camera.key` requires root)
-- A `yurei` service may be running and holding the camera - stop it first:
-  ```bash
-  ssh yurei@10.0.0.229 "sudo systemctl stop yurei"
-  # or
-  ssh yurei@10.0.0.229 "sudo pkill -f '/usr/local/bin/yurei'"
-  ```
 - GPS requires `gpsd` service running with `/dev/ttyUSB1` and GPS enabled on the SIM7600 modem via ModemManager (handled by `kodama-gps.service`)
 
 ## Architecture
