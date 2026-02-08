@@ -82,8 +82,23 @@ echo "  Stopped."
 # --- Step 3: Install system dependencies ---
 echo ""
 echo "=== Step 3: Install system dependencies ==="
-echo "  Installing gpsd, gpsd-clients..."
-pi_ssh "sudo apt-get update -qq && sudo apt-get install -y -qq gpsd gpsd-clients 2>&1 | tail -3"
+
+# Video: rpicam-vid (Pi OS) or libcamera-apps (other ARM)
+# Audio: alsa-utils provides arecord
+# GPS:   gpsd + gpsd-clients
+PACKAGES="alsa-utils gpsd gpsd-clients"
+
+# Check if rpicam-vid or libcamera-vid is already available
+HAS_VIDEO=$(pi_ssh "command -v rpicam-vid >/dev/null 2>&1 && echo rpicam || (command -v libcamera-vid >/dev/null 2>&1 && echo libcamera) || echo none")
+if [ "${HAS_VIDEO}" = "none" ]; then
+    echo "  No video capture tool found, attempting to install libcamera-apps..."
+    PACKAGES="${PACKAGES} libcamera-apps"
+else
+    echo "  Video capture: ${HAS_VIDEO}"
+fi
+
+echo "  Installing: ${PACKAGES}"
+pi_ssh "sudo apt-get update -qq && sudo apt-get install -y -qq ${PACKAGES} 2>&1 | tail -5"
 echo "  Done."
 
 # --- Step 4: Configure NetworkManager ---
