@@ -113,18 +113,19 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Frame> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_frame_roundtrip() {
-        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
-        let payload = Bytes::from_static(b"hello world");
-
-        let frame = Frame {
-            source,
+    fn make_frame(payload: Bytes) -> Frame {
+        Frame {
+            source: SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]),
             channel: Channel::Video,
             flags: FrameFlags::keyframe(),
             timestamp_us: 123456789,
             payload,
-        };
+        }
+    }
+
+    #[test]
+    fn test_frame_roundtrip() {
+        let frame = make_frame(Bytes::from_static(b"hello world"));
 
         let bytes = frame_to_bytes(&frame);
         let decoded = frame_from_bytes(bytes).unwrap();
@@ -138,16 +139,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_write_frame() {
-        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
-        let payload = Bytes::from_static(b"test payload");
-
-        let frame = Frame {
-            source,
-            channel: Channel::Audio,
-            flags: FrameFlags::default(),
-            timestamp_us: 999,
-            payload,
-        };
+        let frame = make_frame(Bytes::from_static(b"test payload"));
+        let frame = Frame { channel: Channel::Audio, flags: FrameFlags::default(), timestamp_us: 999, ..frame };
 
         // Write to buffer
         let mut buf = Vec::new();
@@ -161,5 +154,149 @@ mod tests {
         assert_eq!(decoded.channel, frame.channel);
         assert_eq!(decoded.timestamp_us, frame.timestamp_us);
         assert_eq!(decoded.payload, frame.payload);
+    }
+
+    // ========== Edge cases: frame_from_bytes ==========
+
+    #[test]
+    fn empty_buffer_returns_error() {
+        let result = frame_from_bytes(Bytes::new());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Buffer too small"));
+    }
+
+    #[test]
+    fn truncated_header_returns_error() {
+        // 10 bytes — less than FRAME_HEADER_SIZE (18)
+        let result = frame_from_bytes(Bytes::from_static(&[0u8; 10]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn header_only_no_payload() {
+        // Exactly 18 bytes (header) with no payload
+        let frame = make_frame(Bytes::new());
+        let bytes = frame_to_bytes(&frame);
+        assert_eq!(bytes.len(), FRAME_HEADER_SIZE);
+
+        let decoded = frame_from_bytes(bytes).unwrap();
+        assert!(decoded.payload.is_empty());
+        assert_eq!(decoded.source, frame.source);
+    }
+
+    #[test]
+    fn unknown_channel_roundtrips() {
+        let frame = Frame {
+            channel: Channel::Unknown(42),
+            ..make_frame(Bytes::from_static(b"data"))
+        };
+        let bytes = frame_to_bytes(&frame);
+        let decoded = frame_from_bytes(bytes).unwrap();
+        assert_eq!(decoded.channel, Channel::Unknown(42));
+    }
+
+    #[test]
+    fn max_timestamp_roundtrips() {
+        let frame = Frame {
+            timestamp_us: u64::MAX,
+            ..make_frame(Bytes::from_static(b"x"))
+        };
+        let bytes = frame_to_bytes(&frame);
+        let decoded = frame_from_bytes(bytes).unwrap();
+        assert_eq!(decoded.timestamp_us, u64::MAX);
+    }
+
+    #[test]
+    fn zero_timestamp_roundtrips() {
+        let frame = Frame {
+            timestamp_us: 0,
+            ..make_frame(Bytes::from_static(b"x"))
+        };
+        let bytes = frame_to_bytes(&frame);
+        let decoded = frame_from_bytes(bytes).unwrap();
+        assert_eq!(decoded.timestamp_us, 0);
+    }
+
+    // ========== Edge cases: write_frame / read_frame ==========
+
+    #[tokio::test]
+    async fn write_frame_rejects_oversized_payload() {
+        let payload = Bytes::from(vec![0u8; MAX_FRAME_PAYLOAD_SIZE + 1]);
+        let frame = make_frame(payload);
+
+        let mut buf = Vec::new();
+        let result = write_frame(&mut buf, &frame).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too large"));
+    }
+
+    #[tokio::test]
+    async fn write_frame_accepts_max_payload() {
+        let payload = Bytes::from(vec![0u8; MAX_FRAME_PAYLOAD_SIZE]);
+        let frame = make_frame(payload);
+
+        let mut buf = Vec::new();
+        let result = write_frame(&mut buf, &frame).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_oversized_length_prefix() {
+        // Craft a length prefix claiming > MAX_FRAME_PAYLOAD_SIZE
+        let len = (MAX_FRAME_PAYLOAD_SIZE as u32 + 1).to_be_bytes();
+        let mut cursor = std::io::Cursor::new(len.to_vec());
+
+        let result = read_frame(&mut cursor).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exceeds maximum"));
+    }
+
+    #[tokio::test]
+    async fn read_frame_rejects_length_smaller_than_header() {
+        // Length prefix says 4 bytes — too small for 18-byte header
+        let len = 4u32.to_be_bytes();
+        let mut data = len.to_vec();
+        data.extend_from_slice(&[0u8; 4]); // fake data
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = read_frame(&mut cursor).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too small for header"));
+    }
+
+    #[tokio::test]
+    async fn read_frame_eof_on_truncated_data() {
+        // Length prefix says 100 bytes, but only 10 bytes follow
+        let len = 100u32.to_be_bytes();
+        let mut data = len.to_vec();
+        data.extend_from_slice(&[0u8; 10]);
+        let mut cursor = std::io::Cursor::new(data);
+
+        let result = read_frame(&mut cursor).await;
+        assert!(result.is_err()); // EOF from read_exact
+    }
+
+    #[tokio::test]
+    async fn read_frame_eof_on_missing_length_prefix() {
+        // Only 2 bytes — can't read 4-byte length prefix
+        let mut cursor = std::io::Cursor::new(vec![0u8; 2]);
+
+        let result = read_frame(&mut cursor).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn write_read_empty_payload_roundtrip() {
+        let frame = make_frame(Bytes::new());
+
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &frame).await.unwrap();
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let decoded = read_frame(&mut cursor).await.unwrap();
+
+        assert!(decoded.payload.is_empty());
+        assert_eq!(decoded.source, frame.source);
+        assert_eq!(decoded.timestamp_us, frame.timestamp_us);
     }
 }

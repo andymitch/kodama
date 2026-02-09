@@ -577,10 +577,272 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use kodama_core::{FrameFlags, SourceId};
+
+    fn make_key(seed: u8) -> PublicKey {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed as u64);
+        iroh::SecretKey::generate(&mut rng).public()
+    }
+
+    fn test_frame(timestamp: u64) -> Frame {
+        Frame {
+            source: SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]),
+            channel: kodama_core::Channel::Video,
+            flags: FrameFlags::default(),
+            timestamp_us: timestamp,
+            payload: Bytes::from_static(b"test"),
+        }
+    }
 
     #[test]
     fn test_router_creation() {
         let router = Router::new(64);
         let _handle = router.handle();
+    }
+
+    // ========== Peer registration lifecycle ==========
+
+    #[tokio::test]
+    async fn register_camera_increments_stats() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let key = make_key(1);
+
+        let gen = router.register_peer(key, PeerRole::Camera).await;
+        assert_eq!(gen, 0);
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 1);
+        assert_eq!(stats.clients_connected, 0);
+    }
+
+    #[tokio::test]
+    async fn register_client_increments_stats() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let key = make_key(1);
+
+        router.register_peer(key, PeerRole::Client).await;
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 0);
+        assert_eq!(stats.clients_connected, 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_matching_generation_removes_peer() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let key = make_key(1);
+
+        let gen = router.register_peer(key, PeerRole::Camera).await;
+        assert_eq!(handle.peers().await.len(), 1);
+
+        router.unregister_peer(key, gen).await;
+        assert_eq!(handle.peers().await.len(), 0);
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 0);
+    }
+
+    #[tokio::test]
+    async fn unregister_stale_generation_is_ignored() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let key = make_key(1);
+
+        let old_gen = router.register_peer(key, PeerRole::Camera).await;
+        // Simulate reconnect: same key, new generation
+        let _new_gen = router.register_peer(key, PeerRole::Camera).await;
+
+        // Old handler tries to unregister with stale generation
+        router.unregister_peer(key, old_gen).await;
+
+        // Peer should still be registered (new generation protected it)
+        assert_eq!(handle.peers().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn generation_counter_is_monotonic() {
+        let router = Router::new(64);
+        let key1 = make_key(1);
+        let key2 = make_key(2);
+
+        let gen1 = router.register_peer(key1, PeerRole::Camera).await;
+        let gen2 = router.register_peer(key2, PeerRole::Client).await;
+        let gen3 = router.register_peer(key1, PeerRole::Camera).await;
+
+        assert!(gen1 < gen2);
+        assert!(gen2 < gen3);
+    }
+
+    #[tokio::test]
+    async fn peers_returns_correct_roles() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let cam_key = make_key(1);
+        let client_key = make_key(2);
+
+        router.register_peer(cam_key, PeerRole::Camera).await;
+        router.register_peer(client_key, PeerRole::Client).await;
+
+        let peers = handle.peers().await;
+        assert_eq!(peers.len(), 2);
+
+        let cam = peers.iter().find(|(k, _)| *k == cam_key);
+        assert_eq!(cam.unwrap().1, PeerRole::Camera);
+
+        let client = peers.iter().find(|(k, _)| *k == client_key);
+        assert_eq!(client.unwrap().1, PeerRole::Client);
+    }
+
+    #[tokio::test]
+    async fn reconnect_same_role_does_not_double_count() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let key = make_key(1);
+
+        // First connection
+        router.register_peer(key, PeerRole::Camera).await;
+        // Quick reconnect (same key, same role) — replaces entry, no counter increment
+        router.register_peer(key, PeerRole::Camera).await;
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 1);
+    }
+
+    #[tokio::test]
+    async fn unregister_nonexistent_peer_is_noop() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let key = make_key(1);
+
+        // Unregister a peer that was never registered
+        router.unregister_peer(key, 0).await;
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 0);
+        assert_eq!(stats.clients_connected, 0);
+    }
+
+    // ========== Broadcast frame delivery ==========
+
+    #[tokio::test]
+    async fn broadcast_delivers_to_subscriber() {
+        let router = Router::new(64);
+        let handle = router.handle();
+
+        let mut rx = handle.subscribe();
+        let frame = test_frame(1000);
+        router.broadcast_frame(frame.clone()).await;
+
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.timestamp_us, 1000);
+        assert_eq!(received.payload, Bytes::from_static(b"test"));
+    }
+
+    #[tokio::test]
+    async fn broadcast_delivers_to_multiple_subscribers() {
+        let router = Router::new(64);
+        let handle = router.handle();
+
+        let mut rx1 = handle.subscribe();
+        let mut rx2 = handle.subscribe();
+
+        router.broadcast_frame(test_frame(42)).await;
+
+        assert_eq!(rx1.recv().await.unwrap().timestamp_us, 42);
+        assert_eq!(rx2.recv().await.unwrap().timestamp_us, 42);
+    }
+
+    #[tokio::test]
+    async fn broadcast_with_no_subscribers_succeeds() {
+        let router = Router::new(64);
+        // No subscribers — should not panic or error
+        router.broadcast_frame(test_frame(1)).await;
+
+        let stats = router.handle().stats().await;
+        assert_eq!(stats.frames_received, 1);
+        // No subscribers, so broadcast counter should be 0
+        assert_eq!(stats.frames_broadcast, 0);
+    }
+
+    #[tokio::test]
+    async fn slow_subscriber_gets_lagged_error() {
+        let router = Router::new(4); // Tiny buffer
+        let handle = router.handle();
+        let mut rx = handle.subscribe();
+
+        // Fill buffer beyond capacity
+        for i in 0..8 {
+            router.broadcast_frame(test_frame(i)).await;
+        }
+
+        // First recv should report lag
+        match rx.recv().await {
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                assert!(n > 0, "Should have lagged");
+            }
+            Ok(frame) => {
+                // Some frames may still be in buffer; that's ok
+                assert!(frame.timestamp_us >= 4);
+            }
+            Err(e) => panic!("Unexpected error: {:?}", e),
+        }
+    }
+
+    // ========== Atomic stats counters ==========
+
+    #[tokio::test]
+    async fn stats_track_frames_received_and_broadcast() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let _rx = handle.subscribe(); // Need at least one subscriber for broadcast counter
+
+        router.broadcast_frame(test_frame(1)).await;
+        router.broadcast_frame(test_frame(2)).await;
+        router.broadcast_frame(test_frame(3)).await;
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.frames_received, 3);
+        assert_eq!(stats.frames_broadcast, 3);
+    }
+
+    #[tokio::test]
+    async fn stats_snapshot_from_cloned_handle() {
+        let router = Router::new(64);
+        let handle1 = router.handle();
+        let handle2 = router.handle();
+        let key = make_key(1);
+
+        router.register_peer(key, PeerRole::Camera).await;
+
+        // Both handles see the same state
+        assert_eq!(handle1.stats().await.cameras_connected, 1);
+        assert_eq!(handle2.stats().await.cameras_connected, 1);
+    }
+
+    #[tokio::test]
+    async fn multiple_cameras_and_clients_tracked() {
+        let router = Router::new(64);
+        let handle = router.handle();
+        let cam_key = make_key(1);
+        let client_key = make_key(2);
+
+        let cam_gen = router.register_peer(cam_key, PeerRole::Camera).await;
+        router.register_peer(client_key, PeerRole::Client).await;
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 1);
+        assert_eq!(stats.clients_connected, 1);
+
+        // Unregister camera
+        router.unregister_peer(cam_key, cam_gen).await;
+
+        let stats = handle.stats().await;
+        assert_eq!(stats.cameras_connected, 0);
+        assert_eq!(stats.clients_connected, 1);
     }
 }

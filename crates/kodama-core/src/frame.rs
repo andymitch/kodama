@@ -227,4 +227,55 @@ mod tests {
         let telemetry = Frame::telemetry(source, payload);
         assert_eq!(telemetry.channel, Channel::Telemetry);
     }
+
+    // ========== SourceId edge cases ==========
+
+    #[test]
+    fn source_id_from_node_id_exact_8_bytes() {
+        let bytes = [10u8; 8];
+        let id = SourceId::from_node_id_bytes(&bytes);
+        assert_eq!(id.0, bytes);
+    }
+
+    #[test]
+    fn source_id_from_node_id_truncates_longer_input() {
+        let bytes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let id = SourceId::from_node_id_bytes(&bytes);
+        assert_eq!(id.0, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    #[should_panic(expected = "NodeId bytes must be at least 8 bytes")]
+    fn source_id_from_node_id_panics_on_short_input() {
+        SourceId::from_node_id_bytes(&[1, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "NodeId bytes must be at least 8 bytes")]
+    fn source_id_from_node_id_panics_on_empty_input() {
+        SourceId::from_node_id_bytes(&[]);
+    }
+
+    #[test]
+    fn source_id_all_zeros_display() {
+        let id = SourceId::new([0; 8]);
+        assert_eq!(format!("{}", id), "0000000000000000");
+    }
+
+    #[test]
+    fn source_id_equality_and_hash() {
+        use std::collections::HashSet;
+
+        let a = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+        let b = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+        let c = SourceId::new([8, 7, 6, 5, 4, 3, 2, 1]);
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+
+        let mut set = HashSet::new();
+        set.insert(a);
+        assert!(set.contains(&b));
+        assert!(!set.contains(&c));
+    }
 }
