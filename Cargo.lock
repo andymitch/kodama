@@ -2661,6 +2661,7 @@ dependencies = [
  "kodama-server",
  "ratatui",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

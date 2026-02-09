@@ -42,10 +42,18 @@ pub struct CloudStorageConfig {
     pub segment_duration_us: u64,
     /// Maximum local cache size in bytes
     pub max_cache_bytes: u64,
+    /// Pre-signed URL TTL in seconds (default: 900 = 15 minutes, valid: 60–86400)
+    pub presigned_url_ttl_secs: u64,
 }
 
 impl Default for CloudStorageConfig {
     fn default() -> Self {
+        let presigned_url_ttl_secs = std::env::var("KODAMA_STORAGE_URL_TTL")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|minutes| minutes * 60)
+            .unwrap_or(900); // 15 minutes
+
         Self {
             endpoint_url: None,
             bucket: String::from("kodama-recordings"),
@@ -54,6 +62,7 @@ impl Default for CloudStorageConfig {
             cache_dir: PathBuf::from("/tmp/kodama-cache"),
             segment_duration_us: 60 * 1_000_000, // 1-minute segments
             max_cache_bytes: 1024 * 1024 * 1024, // 1 GB cache
+            presigned_url_ttl_secs,
         }
     }
 }
@@ -77,6 +86,18 @@ impl CloudStorageConfig {
             region: region.to_string(),
             ..Default::default()
         }
+    }
+
+    /// Validate config, returning an error if values are out of range
+    pub fn validate(&self) -> Result<()> {
+        let ttl_minutes = self.presigned_url_ttl_secs / 60;
+        if self.presigned_url_ttl_secs < 60 || ttl_minutes > 1440 {
+            anyhow::bail!(
+                "KODAMA_STORAGE_URL_TTL must be between 1 and 1440 minutes, got {}",
+                ttl_minutes
+            );
+        }
+        Ok(())
     }
 }
 
@@ -126,6 +147,8 @@ pub struct CloudStorage {
 impl CloudStorage {
     /// Create a new cloud storage backend
     pub fn new(config: CloudStorageConfig) -> Result<Self> {
+        config.validate()?;
+
         // Create cache directory
         fs::create_dir_all(&config.cache_dir)
             .with_context(|| format!("Failed to create cache dir: {:?}", config.cache_dir))?;
@@ -222,6 +245,36 @@ impl CloudStorage {
         }
 
         Ok(())
+    }
+
+    /// Generate a pre-signed URL for downloading an object from S3
+    pub fn presign_url(&self, key: &str) -> Result<String> {
+        let s3_url = format!("s3://{}/{}", self.config.bucket, key);
+
+        let mut cmd = Command::new("aws");
+        cmd.args(["s3", "presign", &s3_url]);
+        cmd.args(["--expires-in", &self.config.presigned_url_ttl_secs.to_string()]);
+
+        if let Some(ref endpoint) = self.config.endpoint_url {
+            cmd.args(["--endpoint-url", endpoint]);
+        }
+
+        cmd.args(["--region", &self.config.region]);
+
+        let output = cmd.output()
+            .context("Failed to run aws s3 presign")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("S3 presign failed: {}", stderr);
+        }
+
+        let url = String::from_utf8(output.stdout)
+            .context("Invalid UTF-8 in presign output")?
+            .trim()
+            .to_string();
+
+        Ok(url)
     }
 
     /// Finalize and upload a local segment
@@ -440,5 +493,35 @@ mod tests {
         assert!(key.starts_with("cameras/"));
         assert!(key.contains("0102030405060708"));
         assert!(key.ends_with(".segment"));
+    }
+
+    #[test]
+    fn test_default_presigned_url_ttl() {
+        let config = CloudStorageConfig::default();
+        assert_eq!(config.presigned_url_ttl_secs, 900); // 15 minutes
+    }
+
+    #[test]
+    fn test_presigned_url_ttl_validation() {
+        let mut config = CloudStorageConfig::default();
+
+        // Valid: 15 minutes (default)
+        assert!(config.validate().is_ok());
+
+        // Valid: 1 minute (minimum)
+        config.presigned_url_ttl_secs = 60;
+        assert!(config.validate().is_ok());
+
+        // Valid: 1440 minutes (maximum)
+        config.presigned_url_ttl_secs = 1440 * 60;
+        assert!(config.validate().is_ok());
+
+        // Invalid: 0 seconds
+        config.presigned_url_ttl_secs = 0;
+        assert!(config.validate().is_err());
+
+        // Invalid: > 1440 minutes
+        config.presigned_url_ttl_secs = 1441 * 60;
+        assert!(config.validate().is_err());
     }
 }

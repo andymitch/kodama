@@ -29,6 +29,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 use kodama_core::Frame;
@@ -202,41 +204,54 @@ async fn main() -> Result<()> {
     let router = Router::new(config.buffer_capacity);
     let handle = router.handle();
 
+    // Graceful shutdown infrastructure
+    let cancel = CancellationToken::new();
+    let tracker = TaskTracker::new();
+
     // Spawn storage recording task
     if let Some(storage) = storage.clone() {
         let storage_handle = handle.clone();
-        tokio::spawn(async move {
+        let cancel = cancel.clone();
+        tracker.spawn(async move {
             let mut rx = storage_handle.subscribe();
             let mut frames_stored = 0u64;
             let mut frames_skipped = 0u64;
             let mut last_log = tokio::time::Instant::now();
             loop {
-                match rx.recv().await {
-                    Ok(frame) => {
-                        match storage.store(&frame).await {
-                            Ok(true) => frames_stored += 1,
-                            Ok(false) => frames_skipped += 1,
-                            Err(e) => {
-                                debug!("Storage error: {}", e);
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        info!("Storage task: shutting down");
+                        break;
+                    }
+                    result = rx.recv() => {
+                        match result {
+                            Ok(frame) => {
+                                match storage.store(&frame).await {
+                                    Ok(true) => frames_stored += 1,
+                                    Ok(false) => frames_skipped += 1,
+                                    Err(e) => {
+                                        debug!("Storage error: {}", e);
+                                    }
+                                }
+                                if last_log.elapsed().as_secs() >= 60 {
+                                    let stats = storage.stats().await;
+                                    info!(
+                                        "Storage: {} stored, {} skipped, {} MB used",
+                                        frames_stored,
+                                        frames_skipped,
+                                        stats.bytes_used / (1024 * 1024)
+                                    );
+                                    last_log = tokio::time::Instant::now();
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("Storage lagged, missed {} frames", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                info!("Storage task: broadcast closed");
+                                break;
                             }
                         }
-                        if last_log.elapsed().as_secs() >= 60 {
-                            let stats = storage.stats().await;
-                            info!(
-                                "Storage: {} stored, {} skipped, {} MB used",
-                                frames_stored,
-                                frames_skipped,
-                                stats.bytes_used / (1024 * 1024)
-                            );
-                            last_log = tokio::time::Instant::now();
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("Storage lagged, missed {} frames", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        info!("Storage task: broadcast closed");
-                        break;
                     }
                 }
             }
@@ -246,108 +261,141 @@ async fn main() -> Result<()> {
     // Spawn accept loop (shared between TUI and headless)
     let accept_relay = relay;
     let accept_router = router;
-    tokio::spawn(async move {
+    let accept_cancel = cancel.clone();
+    let accept_tracker = tracker.clone();
+    tracker.spawn(async move {
         loop {
-            match accept_relay.accept().await {
-                Some(conn) => {
-                    let remote = conn.remote_public_key();
-                    info!("New connection from: {}", remote);
-                    let router = accept_router.clone();
-                    tokio::spawn(async move {
-                        let detect_timeout = Duration::from_secs(2);
-                        tokio::select! {
-                            result = conn.accept_frame_stream() => {
-                                match result {
-                                    Ok(receiver) => {
-                                        info!(peer = %remote, "Detected as camera (opened stream)");
+            tokio::select! {
+                _ = accept_cancel.cancelled() => {
+                    info!("Accept loop: shutting down");
+                    break;
+                }
+                conn = accept_relay.accept() => {
+                    match conn {
+                        Some(conn) => {
+                            let remote = conn.remote_public_key();
+                            info!("New connection from: {}", remote);
+                            let router = accept_router.clone();
+                            let cancel = accept_cancel.clone();
+                            accept_tracker.spawn(async move {
+                                let detect_timeout = Duration::from_secs(2);
+                                tokio::select! {
+                                    _ = cancel.cancelled() => {}
+                                    result = conn.accept_frame_stream() => {
+                                        match result {
+                                            Ok(receiver) => {
+                                                info!(peer = %remote, "Detected as camera (opened stream)");
+                                                let cmd_conn = conn.clone_handle();
+                                                let cmd_router = router.clone();
+                                                tokio::spawn(async move {
+                                                    match cmd_conn.accept_command_stream().await {
+                                                        Ok(cmd_stream) => {
+                                                            info!(peer = %remote, "Command channel accepted from camera");
+                                                            cmd_router.register_camera_commands(remote, cmd_stream);
+                                                        }
+                                                        Err(e) => {
+                                                            warn!(peer = %remote, error = %e, "Failed to accept command stream from camera");
+                                                        }
+                                                    }
+                                                });
+                                                if let Err(e) = router.handle_camera_with_receiver(remote, receiver).await {
+                                                    warn!(peer = %remote, error = %e, "Camera handler error");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!(peer = %remote, error = %e, "Failed to accept stream");
+                                            }
+                                        }
+                                    }
+                                    _ = tokio::time::sleep(detect_timeout) => {
+                                        info!(peer = %remote, "Detected as client (no stream opened)");
                                         let cmd_conn = conn.clone_handle();
                                         let cmd_router = router.clone();
                                         tokio::spawn(async move {
-                                            match cmd_conn.accept_command_stream().await {
+                                            match cmd_conn.accept_client_command_stream().await {
                                                 Ok(cmd_stream) => {
-                                                    info!(peer = %remote, "Command channel accepted from camera");
-                                                    cmd_router.register_camera_commands(remote, cmd_stream);
+                                                    info!(peer = %remote, "Client command channel accepted");
+                                                    cmd_router.handle_client_commands(remote, cmd_stream).await;
                                                 }
                                                 Err(e) => {
-                                                    warn!(peer = %remote, error = %e, "Failed to accept command stream from camera");
+                                                    debug!(peer = %remote, error = %e, "No client command stream");
                                                 }
                                             }
                                         });
-                                        if let Err(e) = router.handle_camera_with_receiver(remote, receiver).await {
-                                            warn!(peer = %remote, error = %e, "Camera handler error");
+                                        if let Err(e) = router.handle_client(conn).await {
+                                            warn!(peer = %remote, error = %e, "Client handler error");
                                         }
-                                    }
-                                    Err(e) => {
-                                        warn!(peer = %remote, error = %e, "Failed to accept stream");
                                     }
                                 }
-                            }
-                            _ = tokio::time::sleep(detect_timeout) => {
-                                info!(peer = %remote, "Detected as client (no stream opened)");
-                                let cmd_conn = conn.clone_handle();
-                                let cmd_router = router.clone();
-                                tokio::spawn(async move {
-                                    match cmd_conn.accept_client_command_stream().await {
-                                        Ok(cmd_stream) => {
-                                            info!(peer = %remote, "Client command channel accepted");
-                                            cmd_router.handle_client_commands(remote, cmd_stream).await;
-                                        }
-                                        Err(e) => {
-                                            debug!(peer = %remote, error = %e, "No client command stream");
-                                        }
-                                    }
-                                });
-                                if let Err(e) = router.handle_client(conn).await {
-                                    warn!(peer = %remote, error = %e, "Client handler error");
-                                }
-                            }
+                            });
                         }
-                    });
-                }
-                None => {
-                    error!("Relay accept returned None, shutting down");
-                    break;
+                        None => {
+                            error!("Relay accept returned None, shutting down");
+                            break;
+                        }
+                    }
                 }
             }
         }
     });
 
+    // Close the tracker so wait() can complete once all tasks finish
+    tracker.close();
+
     if let Some((_tx, rx)) = log_tx {
-        run_tui(public_key, handle, storage, rx).await
+        run_tui(public_key, handle, storage, cancel, tracker, rx).await
     } else {
-        run_headless(handle, storage).await
+        run_headless(handle, storage, cancel, tracker).await
     }
 }
 
-/// Headless mode: log stats periodically and wait forever
+/// Headless mode: log stats periodically, shut down on SIGINT/SIGTERM
 async fn run_headless(
     handle: kodama_server::RouterHandle,
     storage: Option<Arc<StorageHandle>>,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
 ) -> Result<()> {
     info!("Waiting for connections...");
     let mut stats_interval = interval(Duration::from_secs(30));
     loop {
-        stats_interval.tick().await;
-        let stats = handle.stats().await;
-        let storage_info = if let Some(ref s) = storage {
-            let ss = s.stats().await;
-            format!(
-                ", {} frames recorded, {} MB",
-                ss.frames_stored,
-                ss.bytes_used / (1024 * 1024)
-            )
-        } else {
-            String::new()
-        };
-        info!(
-            "Stats: {} cameras, {} clients, {} frames received, {} broadcast{}",
-            stats.cameras_connected,
-            stats.clients_connected,
-            stats.frames_received,
-            stats.frames_broadcast,
-            storage_info
-        );
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received shutdown signal, draining tasks...");
+                cancel.cancel();
+                break;
+            }
+            _ = stats_interval.tick() => {
+                let stats = handle.stats().await;
+                let storage_info = if let Some(ref s) = storage {
+                    let ss = s.stats().await;
+                    format!(
+                        ", {} frames recorded, {} MB",
+                        ss.frames_stored,
+                        ss.bytes_used / (1024 * 1024)
+                    )
+                } else {
+                    String::new()
+                };
+                info!(
+                    "Stats: {} cameras, {} clients, {} frames received, {} broadcast{}",
+                    stats.cameras_connected,
+                    stats.clients_connected,
+                    stats.frames_received,
+                    stats.frames_broadcast,
+                    storage_info
+                );
+            }
+        }
     }
+
+    // Wait for all tracked tasks to finish (with timeout)
+    if tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await.is_err() {
+        warn!("Shutdown timed out after 5s, some tasks may not have finished");
+    } else {
+        info!("All tasks shut down cleanly");
+    }
+    Ok(())
 }
 
 /// TUI mode: interactive ratatui terminal
@@ -355,6 +403,8 @@ async fn run_tui(
     public_key: String,
     handle: kodama_server::RouterHandle,
     storage: Option<Arc<StorageHandle>>,
+    cancel: CancellationToken,
+    tracker: TaskTracker,
     mut log_rx: mpsc::UnboundedReceiver<String>,
 ) -> Result<()> {
     use crossterm::{
@@ -402,6 +452,13 @@ async fn run_tui(
     // Restore terminal
     disable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+
+    // Signal all tasks to shut down and wait
+    info!("Shutting down...");
+    cancel.cancel();
+    if tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await.is_err() {
+        warn!("Shutdown timed out after 5s, some tasks may not have finished");
+    }
 
     result
 }
