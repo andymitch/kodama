@@ -467,4 +467,205 @@ mod tests {
         let source = parse_source_id_from_dir(&path).unwrap();
         assert_eq!(source.0, [1, 2, 3, 4, 5, 6, 7, 8]);
     }
+
+    #[test]
+    fn test_parse_source_id_rejects_wrong_length() {
+        assert!(parse_source_id_from_dir(&PathBuf::from("/storage/0102")).is_none());
+        assert!(parse_source_id_from_dir(&PathBuf::from("/storage/01020304050607080910")).is_none());
+    }
+
+    #[test]
+    fn test_parse_source_id_rejects_non_hex() {
+        assert!(parse_source_id_from_dir(&PathBuf::from("/storage/ghijklmnopqrstuv")).is_none());
+    }
+
+    fn make_frame(source: SourceId, timestamp_us: u64, data: &str) -> Frame {
+        Frame {
+            source,
+            channel: Channel::Video,
+            flags: FrameFlags::default(),
+            timestamp_us,
+            payload: Bytes::from(data.to_string()),
+        }
+    }
+
+    fn test_config(dir: &Path) -> LocalStorageConfig {
+        LocalStorageConfig {
+            root_path: dir.to_path_buf(),
+            max_size_bytes: 0,
+            segment_duration_us: 1_000_000, // 1-second segments
+        }
+    }
+
+    // ========== Cleanup cycle ==========
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_deletes_old_segments() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // Store frames in two different segments (1s apart)
+        storage.store_frame(&make_frame(source, 100_000, "old")).await.unwrap();
+        storage.store_frame(&make_frame(source, 1_500_000, "new")).await.unwrap();
+        storage.flush().await.unwrap();
+
+        let usage_before = storage.usage_bytes().await.unwrap();
+        assert!(usage_before > 0);
+
+        // Cleanup everything before the second segment
+        let deleted = storage.cleanup(1_000_000).await.unwrap();
+        assert!(deleted > 0);
+
+        // Only the second segment should remain
+        let frames = storage.get_frames(source, 0, 2_000_000).await.unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].timestamp_us, 1_500_000);
+
+        let usage_after = storage.usage_bytes().await.unwrap();
+        assert!(usage_after < usage_before);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_with_nothing_to_delete() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+
+        storage.store_frame(&make_frame(source, 1_000_000, "recent")).await.unwrap();
+        storage.flush().await.unwrap();
+
+        // Cleanup before the earliest frame — nothing to delete
+        let deleted = storage.cleanup(500_000).await.unwrap();
+        assert_eq!(deleted, 0);
+
+        let frames = storage.get_frames(source, 0, 2_000_000).await.unwrap();
+        assert_eq!(frames.len(), 1);
+    }
+
+    // ========== Index rebuild on startup ==========
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn index_rebuilds_from_existing_files() {
+        let dir = tempdir().unwrap();
+        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // Phase 1: write data and drop storage
+        {
+            let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+            storage.store_frame(&make_frame(source, 100_000, "frame1")).await.unwrap();
+            storage.store_frame(&make_frame(source, 200_000, "frame2")).await.unwrap();
+            storage.flush().await.unwrap();
+        }
+
+        // Phase 2: create new storage instance — should rebuild index from disk
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+
+        let usage = storage.usage_bytes().await.unwrap();
+        assert!(usage > 0, "Index should have been rebuilt from disk");
+
+        let frames = storage.get_frames(source, 0, 500_000).await.unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].timestamp_us, 100_000);
+        assert_eq!(frames[1].timestamp_us, 200_000);
+    }
+
+    // ========== Multiple sources ==========
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_writes_to_different_sources() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+        let source1 = SourceId::new([1, 0, 0, 0, 0, 0, 0, 0]);
+        let source2 = SourceId::new([2, 0, 0, 0, 0, 0, 0, 0]);
+
+        // Interleave writes from two sources
+        storage.store_frame(&make_frame(source1, 100_000, "s1-f1")).await.unwrap();
+        storage.store_frame(&make_frame(source2, 100_000, "s2-f1")).await.unwrap();
+        storage.store_frame(&make_frame(source1, 200_000, "s1-f2")).await.unwrap();
+        storage.store_frame(&make_frame(source2, 200_000, "s2-f2")).await.unwrap();
+        storage.flush().await.unwrap();
+
+        let frames1 = storage.get_frames(source1, 0, 500_000).await.unwrap();
+        let frames2 = storage.get_frames(source2, 0, 500_000).await.unwrap();
+
+        assert_eq!(frames1.len(), 2);
+        assert_eq!(frames2.len(), 2);
+        assert_eq!(frames1[0].payload, Bytes::from("s1-f1"));
+        assert_eq!(frames2[0].payload, Bytes::from("s2-f1"));
+    }
+
+    // ========== Segment boundaries ==========
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn frames_spanning_multiple_segments() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // Write frames across 3 segments (1s each)
+        for i in 0..3 {
+            let timestamp = i * 1_000_000 + 500_000; // 0.5s, 1.5s, 2.5s
+            storage.store_frame(&make_frame(source, timestamp, &format!("seg{}", i))).await.unwrap();
+        }
+        storage.flush().await.unwrap();
+
+        // Query full range
+        let all = storage.get_frames(source, 0, 3_000_000).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Query partial range (only middle segment)
+        let mid = storage.get_frames(source, 1_000_000, 2_000_000).await.unwrap();
+        assert_eq!(mid.len(), 1);
+        assert_eq!(mid[0].timestamp_us, 1_500_000);
+    }
+
+    // ========== Edge cases ==========
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_frames_unknown_source_returns_empty() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+        let unknown = SourceId::new([99, 99, 99, 99, 99, 99, 99, 99]);
+
+        let frames = storage.get_frames(unknown, 0, u64::MAX).await.unwrap();
+        assert!(frames.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn empty_storage_reports_zero_usage() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+
+        assert_eq!(storage.usage_bytes().await.unwrap(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn available_bytes_returns_some() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+
+        let available = storage.available_bytes().await.unwrap();
+        assert!(available.is_some());
+        assert!(available.unwrap() > 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cleanup_updates_total_bytes_correctly() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(test_config(dir.path())).unwrap();
+        let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
+
+        storage.store_frame(&make_frame(source, 100_000, "data")).await.unwrap();
+        storage.flush().await.unwrap();
+
+        let before = storage.usage_bytes().await.unwrap();
+        assert!(before > 0);
+
+        let deleted = storage.cleanup(u64::MAX).await.unwrap();
+        assert_eq!(deleted, before);
+
+        let after = storage.usage_bytes().await.unwrap();
+        assert_eq!(after, 0);
+    }
 }
