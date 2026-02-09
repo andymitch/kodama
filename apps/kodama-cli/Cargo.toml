@@ -1,0 +1,22 @@
+[package]
+name = "kodama-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Terminal UI server for Kodama"
+
+[[bin]]
+name = "kodama-cli"
+path = "src/main.rs"
+
+[dependencies]
+kodama-core = { workspace = true }
+kodama-server = { workspace = true }
+iroh = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }

@@ -1,18 +1,19 @@
 [package]
-name = "kodama-server-cli"
+name = "kodama-relay-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Headless server binary for Kodama"
+description = "Lightweight standalone relay for Kodama"
 
 [[bin]]
-name = "kodama-server"
+name = "kodama-relay"
 path = "src/main.rs"
 
 [dependencies]
 kodama-core = { workspace = true }
-kodama-server = { workspace = true }
+kodama-relay = { workspace = true }
+iroh = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

@@ -31,7 +31,7 @@ cleanup() {
         kill "$CLIENT_PID" 2>/dev/null || true
     fi
     # Remove temp files
-    rm -f /tmp/kodama-server.log /tmp/kodama-camera.log /tmp/kodama-client.log
+    rm -f /tmp/kodama-cli.log /tmp/kodama-camera.log /tmp/kodama-client.log
     rm -f ./server.key ./camera.key  # Clean up keys
 }
 
@@ -39,30 +39,30 @@ trap cleanup EXIT
 
 # Build all binaries with test-source feature for camera
 echo "Building binaries..."
-cargo build --release --bin kodama-server
+cargo build --release --bin kodama-cli
 cargo build --release --bin kodama-camera --features test-source
-cargo build --release --bin kodama-desktop
+cargo build --release --bin kodama-client
 echo "Build complete."
 echo ""
 
 # Start server
 echo "Starting server..."
-./target/release/kodama-server > /tmp/kodama-server.log 2>&1 &
+./target/release/kodama-cli > /tmp/kodama-cli.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 # Check server is running
 if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "ERROR: Server failed to start"
-    cat /tmp/kodama-server.log
+    cat /tmp/kodama-cli.log
     exit 1
 fi
 
 # Extract server's public key from logs
-SERVER_KEY=$(grep "Server PublicKey:" /tmp/kodama-server.log | head -1 | awk '{print $NF}')
+SERVER_KEY=$(grep "Server PublicKey:" /tmp/kodama-cli.log | head -1 | awk '{print $NF}')
 if [ -z "$SERVER_KEY" ]; then
     echo "ERROR: Could not find server PublicKey in logs"
-    cat /tmp/kodama-server.log
+    cat /tmp/kodama-cli.log
     exit 1
 fi
 
@@ -88,7 +88,7 @@ echo ""
 
 # Start client
 echo "Starting client..."
-KODAMA_SERVER_KEY="$SERVER_KEY" ./target/release/kodama-desktop > /tmp/kodama-client.log 2>&1 &
+KODAMA_SERVER_KEY="$SERVER_KEY" ./target/release/kodama-client > /tmp/kodama-client.log 2>&1 &
 CLIENT_PID=$!
 sleep 5  # Give time for connection and frame stream
 
@@ -104,7 +104,7 @@ echo "Server PublicKey: $SERVER_KEY"
 echo "Camera PublicKey: $CAMERA_KEY"
 echo ""
 echo "Logs:"
-echo "  Server: /tmp/kodama-server.log"
+echo "  Server: /tmp/kodama-cli.log"
 echo "  Camera: /tmp/kodama-camera.log"
 echo "  Client: /tmp/kodama-client.log"
 echo ""
@@ -119,7 +119,7 @@ echo "=== Results ==="
 echo ""
 
 echo "--- Server Stats ---"
-grep -E "(Stats:|frames|cameras|clients)" /tmp/kodama-server.log | tail -5 || echo "(no stats yet)"
+grep -E "(Stats:|frames|cameras|clients)" /tmp/kodama-cli.log | tail -5 || echo "(no stats yet)"
 echo ""
 
 echo "--- Camera Stats ---"
@@ -131,9 +131,9 @@ grep -E "(Stats:|frames|keyframes|Mbps)" /tmp/kodama-client.log | tail -5 || ech
 echo ""
 
 # Check for errors
-if grep -q "error" /tmp/kodama-server.log; then
+if grep -q "error" /tmp/kodama-cli.log; then
     echo "WARNING: Errors found in server log"
-    grep "error" /tmp/kodama-server.log | head -5
+    grep "error" /tmp/kodama-cli.log | head -5
 fi
 
 if grep -q "error" /tmp/kodama-camera.log; then

@@ -33,8 +33,8 @@ cargo test
 ### Running
 
 ```bash
-# 1. Start the server (prints public key)
-cargo run -p kodama-server-cli
+# 1. Start the server (prints public key, TUI dashboard)
+cargo run -p kodama-cli
 
 # 2. Start a camera (pass server's public key)
 KODAMA_SERVER_KEY=<key> cargo run -p kodama-camera
@@ -64,9 +64,10 @@ kodama/
 │   ├── kodama-server/         # Router (broadcast), ClientManager, StorageManager
 │   └── kodama-storage/        # StorageBackend trait (local filesystem, S3/R2)
 ├── apps/                      # Application binaries
+│   ├── kodama-cli/            # TUI server (interactive dashboard / headless)
+│   ├── kodama-relay-cli/      # Standalone relay (lightweight frame forwarder)
 │   ├── kodama-camera/         # Camera binary (Raspberry Pi)
-│   ├── kodama-server-cli/     # Headless server
-│   ├── kodama-client/         # CLI viewer
+│   ├── kodama-client/         # Utility CLI viewer
 │   ├── kodama-desktop/        # Tauri + SvelteKit desktop app
 │   └── kodama-mobile/         # Tauri + SvelteKit mobile app
 ├── pi/                        # Pi system configs (deployed by scripts/pi.sh)

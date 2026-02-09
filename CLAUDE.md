@@ -17,7 +17,9 @@ This pins crypto dependencies (`sha2`, `digest`) to specific versions needed for
 ### Build
 ```bash
 cargo build                        # All workspace crates
-cargo build -p kodama-camera       # Specific app
+cargo build -p kodama-cli          # TUI server
+cargo build -p kodama-relay-cli    # Standalone relay
+cargo build -p kodama-camera       # Camera
 cargo build -p kodama-camera --features test-source  # With synthetic test source
 ```
 
@@ -31,8 +33,11 @@ cargo test -p kodama-server --test e2e  # E2E regression suite (real QUIC, no ha
 
 ### Run
 ```bash
-# Server (prints public key for cameras/clients)
-cargo run -p kodama-server-cli
+# Server TUI (prints public key, interactive dashboard)
+cargo run -p kodama-cli
+
+# Standalone relay (lightweight frame forwarder)
+cargo run -p kodama-relay-cli
 
 # Camera (requires server key)
 KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-camera
@@ -40,14 +45,11 @@ KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-camera
 # Camera with test source (no hardware)
 KODAMA_SERVER_KEY=<key> cargo run -p kodama-camera --features test-source -- --test-source
 
-# CLI client
-KODAMA_SERVER_KEY=<key> cargo run -p kodama-client
-
 # Desktop app (Tauri)
-cd apps/kodama-desktop && npm run tauri dev
+cd apps/kodama-desktop && bun run tauri dev
 
 # Mobile app (Tauri)
-cd apps/kodama-mobile && npm run tauri dev
+cd apps/kodama-mobile && bun run tauri dev
 ```
 
 ## Pi Deployment
@@ -109,11 +111,12 @@ Kodama is a privacy-focused P2P security camera system using Iroh for transport.
 - **kodama-storage** - StorageBackend trait with local filesystem and cloud (S3/R2) implementations
 
 **Application crates** (`apps/`):
-- **kodama-server-cli** - Headless server binary
+- **kodama-cli** - TUI server (interactive dashboard, falls back to headless when stdout is not a TTY)
+- **kodama-relay-cli** - Standalone relay (lightweight frame forwarder, no storage/routing)
 - **kodama-camera** - Camera capture binary
-- **kodama-client** - Lite CLI viewer (client-only)
 - **kodama-desktop** - Tauri + SvelteKit desktop app (server + client modes)
 - **kodama-mobile** - Tauri + SvelteKit mobile app (server + client modes)
+- **kodama-client** - Utility CLI viewer (not part of primary app model)
 
 ### Data Flow
 ```
