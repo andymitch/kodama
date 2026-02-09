@@ -18,7 +18,7 @@ This pins crypto dependencies (`sha2`, `digest`) to specific versions needed for
 ```bash
 cargo build                        # All workspace crates
 cargo build -p kodama-cli          # TUI server
-cargo build -p kodama-relay-cli    # Standalone relay
+cargo build -p kodama-relay-bin    # Standalone relay
 cargo build -p kodama-camera       # Camera
 cargo build -p kodama-camera --features test-source  # With synthetic test source
 ```
@@ -37,7 +37,7 @@ cargo test -p kodama-server --test e2e  # E2E regression suite (real QUIC, no ha
 cargo run -p kodama-cli
 
 # Standalone relay (lightweight frame forwarder)
-cargo run -p kodama-relay-cli
+cargo run -p kodama-relay-bin
 
 # Camera (requires server key)
 KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-camera
@@ -112,11 +112,10 @@ Kodama is a privacy-focused P2P security camera system using Iroh for transport.
 
 **Application crates** (`apps/`):
 - **kodama-cli** - TUI server (interactive dashboard, falls back to headless when stdout is not a TTY)
-- **kodama-relay-cli** - Standalone relay (lightweight frame forwarder, no storage/routing)
+- **kodama-relay** - Standalone relay (lightweight frame forwarder, no storage/routing)
 - **kodama-camera** - Camera capture binary
 - **kodama-desktop** - Tauri + SvelteKit desktop app (server + client modes)
 - **kodama-mobile** - Tauri + SvelteKit mobile app (server + client modes)
-- **kodama-client** - Utility CLI viewer (not part of primary app model)
 
 ### Data Flow
 ```
@@ -142,10 +141,11 @@ Cameras open a frame stream immediately (they're senders). Clients wait for the 
 ## Environment Variables
 
 Key variables (all prefixed `KODAMA_`):
-- `KODAMA_SERVER_KEY` - Server's base32 public key (required for camera/client)
+- `KODAMA_SERVER_KEY` - Server's base32 public key (required for camera)
 - `KODAMA_KEY_PATH` - Path to keypair file (default: ./camera.key or ./server.key)
 - `KODAMA_STORAGE_PATH` - Recording location
 - `KODAMA_BUFFER_SIZE` - Broadcast buffer capacity (default: 512)
+- `KODAMA_UPSTREAM_KEY` - Upstream server key (relay only)
 - `RUST_LOG` - Tracing filter (e.g., `kodama=debug`)
 
 ## Key Patterns
@@ -154,7 +154,7 @@ Key variables (all prefixed `KODAMA_`):
 - Use `anyhow::Result<T>` for errors
 - Work with existing abstractions (Relay, Router, StorageBackend) rather than Iroh primitives directly
 - Feature flag `test-source` enables synthetic video/audio without hardware
-- Code is source of truth; docs in `docs/architecture/` may lag
+- Code is source of truth
 
 ## Additional Documentation
 

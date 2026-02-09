@@ -1,17 +1,20 @@
 [package]
-name = "kodama-client"
+name = "kodama-relay-bin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Lite CLI viewer for Kodama (client-only, no server)"
+description = "Standalone relay server for Kodama"
+
+[[bin]]
+name = "kodama-relay"
+path = "src/main.rs"
 
 [dependencies]
 kodama-core = { workspace = true }
 kodama-relay = { workspace = true }
-kodama-capture = { workspace = true }  # For decode_telemetry
-tokio = { workspace = true }
 iroh = { workspace = true }
+tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

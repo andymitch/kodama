@@ -18,7 +18,7 @@ This file provides guidance to AI coding agents when working with code in this r
   - `cargo build --release`
 - Build specific binaries:
   - `cargo build -p kodama-cli`
-  - `cargo build -p kodama-relay-cli`
+  - `cargo build -p kodama-relay-bin`
   - `cargo build -p kodama-camera`
 
 ### Tests
@@ -43,11 +43,11 @@ This file provides guidance to AI coding agents when working with code in this r
 
 #### Standalone Relay
 - Run a lightweight relay (frame forwarder, no storage or rate limiting):
-  - `cargo run -p kodama-relay-cli`
+  - `cargo run -p kodama-relay-bin`
 - Run relay with explicit key path:
-  - `KODAMA_KEY_PATH=./relay.key cargo run -p kodama-relay-cli`
+  - `KODAMA_KEY_PATH=./relay.key cargo run -p kodama-relay-bin`
 - Relay that forwards everything to an upstream server while also serving local clients:
-  - `KODAMA_UPSTREAM_KEY=<server_public_key> cargo run -p kodama-relay-cli`
+  - `KODAMA_UPSTREAM_KEY=<server_public_key> cargo run -p kodama-relay-bin`
 
 #### Camera
 - Environment variable required by all camera runs:
@@ -75,15 +75,14 @@ This file provides guidance to AI coding agents when working with code in this r
   - `crates/kodama-server` – Router (broadcast), ClientManager, StorageManager, rate limiting.
   - `crates/kodama-storage` – StorageBackend trait with local filesystem and cloud (S3/R2) implementations.
   - `apps/kodama-cli` – TUI server binary (interactive dashboard or headless logging).
-  - `apps/kodama-relay-cli` – Standalone relay binary (lightweight frame forwarder).
+  - `apps/kodama-relay` – Standalone relay binary (lightweight frame forwarder). Package name: `kodama-relay-bin`.
   - `apps/kodama-camera` – Camera capture binary.
   - `apps/kodama-desktop` – Tauri + SvelteKit desktop app (server + client).
   - `apps/kodama-mobile` – Tauri + SvelteKit mobile app (stub).
-  - `apps/kodama-client` – Utility CLI viewer (deprioritized).
 
 ### Three-module system
 
-Conceptually the system follows the three-module design described in `docs/architecture/adr-001-three-module-system.md`:
+Conceptually the system follows a three-module design:
 
 - **Camera module (capture/ + camera binary):**
   - Runs in `kodama-camera`.
@@ -91,10 +90,10 @@ Conceptually the system follows the three-module design described in `docs/archi
   - Uses `Relay` to connect to a server/relay and send `Frame` objects over a persistent Iroh stream.
   - All capture channels are funneled through a single `mpsc` channel (`CaptureMessage`) for multiplexing.
 
-- **Relay module (relay/ and kodama-relay-cli binary):**
+- **Relay module (relay/ and kodama-relay binary):**
   - `relay::transport` wraps the Iroh `Endpoint` (as `KodamaEndpoint`) and provides connection primitives.
   - `relay::mux` handles serialization and de/serialization of `Frame` to raw bytes and back.
-  - `kodama-relay-cli` embeds a lightweight router built on `broadcast::Sender<Frame>`:
+  - `kodama-relay` (package: `kodama-relay-bin`) embeds a lightweight router built on `broadcast::Sender<Frame>`:
     - Cameras push frames into the broadcast channel.
     - Clients subscribe and receive frames over a persistent stream.
     - Optional upstream connection pushes frames to a full server instance.
@@ -115,7 +114,7 @@ At the heart of the system is `core::Frame`:
 - `timestamp_us` – microsecond timestamp filled in by producers.
 - `payload` – raw bytes, interpreted by the consumer based on `channel`.
 
-The serialized frame format (see ADR-001 and `core::protocol`) includes:
+The serialized frame format (see `core::protocol`) includes:
 - Fixed-size header (source id, channel, flags, timestamp, length) followed by payload bytes.
 - `relay::mux::frame` is the single place that converts between `Frame` and bytes; all binaries route binary I/O through this layer.
 
@@ -138,7 +137,7 @@ The serialized frame format (see ADR-001 and `core::protocol`) includes:
 - Accepts connections and infers peer role (camera opens stream quickly; client waits).
 - Storage task subscribes to router and records frames; stats task logs periodically.
 
-**`kodama-relay-cli`** (`apps/kodama-relay-cli/src/main.rs`)
+**`kodama-relay`** (`apps/kodama-relay/src/main.rs`, package: `kodama-relay-bin`)
 - Lightweight relay: no storage, no command routing, no rate limiting.
 - Accepts cameras and clients, forwards frames via `broadcast::Sender<Frame>`.
 - Optional upstream forwarding when `KODAMA_UPSTREAM_KEY` is set.
@@ -155,4 +154,4 @@ When changing behavior, prefer to work with the existing abstraction layers:
 - **Routing/recording:** Use `Router` + `StorageManager` APIs instead of re-implementing broadcast or storage loops.
 - **Capture/telemetry:** Extend the `capture` module (and `CaptureMessage` in the camera binary) when adding new sensor channels, then map them to new `Channel` variants if needed.
 
-The architecture docs under `docs/architecture/` are occasionally ahead of or behind the implementation. Prefer the **code** as the source of truth for current behavior, and use the ADR/POC docs for high-level intent when designing new features.
+Prefer the **code** as the source of truth for current behavior.

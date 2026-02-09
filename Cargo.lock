@@ -2666,20 +2666,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kodama-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "kodama-capture",
- "kodama-core",
- "kodama-relay",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "kodama-core"
 version = "0.1.0"
 dependencies = [
@@ -2750,7 +2736,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kodama-relay-cli"
+name = "kodama-relay-bin"
 version = "0.1.0"
 dependencies = [
  "anyhow",

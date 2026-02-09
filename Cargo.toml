@@ -7,9 +7,8 @@ members = [
     "crates/kodama-storage",
     "crates/kodama-server",
     "apps/kodama-cli",
-    "apps/kodama-relay-cli",
+    "apps/kodama-relay",
     "apps/kodama-camera",
-    "apps/kodama-client",
     "apps/kodama-desktop/src-tauri",
     "apps/kodama-mobile/src-tauri",
 ]

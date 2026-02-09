@@ -24,10 +24,9 @@ The core streaming pipeline (camera → server → client) is **production-ready
 | Camera binary (`kodama-camera`) | Production — streaming, ABR, reconnection, cellular failover |
 | Server library (`kodama-server`) | Production — routing, rate limiting, storage, command forwarding |
 | TUI server (`kodama-cli`) | Functional — headless + basic TUI dashboard ([#19](https://github.com/andymitch/kodama/issues/19)) |
-| Standalone relay (`kodama-relay-cli`) | Functional — lightweight frame forwarder |
+| Standalone relay (`kodama-relay`) | Functional — lightweight frame forwarder |
 | Desktop app (`kodama-desktop`) | In progress — MSE video backend done, UI under development ([#20](https://github.com/andymitch/kodama/issues/20)) |
 | Mobile app (`kodama-mobile`) | Scaffold — Tauri structure in place, needs implementation ([#21](https://github.com/andymitch/kodama/issues/21)) |
-| CLI viewer (`kodama-client`) | Functional — receives frames, displays telemetry stats |
 
 ## Quick Start
 
@@ -52,9 +51,6 @@ cargo run -p kodama-cli
 
 # 2. Start a camera with synthetic test source (no hardware needed)
 KODAMA_SERVER_KEY=<key> cargo run -p kodama-camera --features test-source -- --test-source
-
-# 3. Start a client to verify frames are flowing
-KODAMA_SERVER_KEY=<key> cargo run -p kodama-client
 ```
 
 The server auto-detects whether stdout is a TTY: interactive terminal gets a ratatui dashboard, redirected output falls back to plain logging.
@@ -81,17 +77,15 @@ kodama/
 │   └── kodama-storage/        #   StorageBackend trait (local filesystem, S3/R2)
 ├── apps/                      # Application binaries
 │   ├── kodama-cli/            #   TUI server (ratatui dashboard / headless)
-│   ├── kodama-relay-cli/      #   Standalone relay (lightweight frame forwarder)
+│   ├── kodama-relay/          #   Standalone relay (lightweight frame forwarder)
 │   ├── kodama-camera/         #   Camera capture (Raspberry Pi + test source)
-│   ├── kodama-client/         #   CLI viewer (telemetry stats)
 │   ├── kodama-desktop/        #   Tauri + SvelteKit desktop app
 │   └── kodama-mobile/         #   Tauri + SvelteKit mobile app
 ├── pi/                        # Pi system configs (gpsd, NetworkManager, systemd)
-├── docs/architecture/         # ADRs and design specs
 └── scripts/
     ├── setup.sh               #   Pin crypto dependencies
     ├── pi.sh                  #   Pi management (setup, deploy, wifi-off)
-    └── test-e2e.sh            #   Full pipeline test (server + camera + client)
+    └── test-e2e.sh            #   Full pipeline test (server + camera)
 ```
 
 ### Frame Format
@@ -136,7 +130,7 @@ cargo test --workspace --exclude kodama-mobile
 # E2E regression suite (real QUIC connections, no hardware)
 cargo test -p kodama-server --test e2e
 
-# Full pipeline test (builds release, runs server + camera + client for 30s)
+# Full pipeline test (builds release, runs server + camera for 20s)
 ./scripts/test-e2e.sh
 ```
 
@@ -146,14 +140,14 @@ The E2E suite validates frame flow through the router, 2 MB frame size enforceme
 
 | Variable | Description | Default |
 |---|---|---|
-| `KODAMA_SERVER_KEY` | Server's base32 public key (required for camera/client) | — |
+| `KODAMA_SERVER_KEY` | Server's base32 public key (required for camera) | — |
 | `KODAMA_KEY_PATH` | Path to persistent keypair file | `./server.key` or `./camera.key` |
 | `KODAMA_STORAGE_PATH` | Recording storage location (enables recording) | disabled |
 | `KODAMA_STORAGE_MAX_GB` | Maximum storage size in GB | `10` |
 | `KODAMA_RETENTION_DAYS` | Recording retention period | `7` |
 | `KODAMA_BUFFER_SIZE` | Broadcast channel capacity | `512` |
 | `KODAMA_ABR` | Set to `0` to disable adaptive bitrate | enabled |
-| `KODAMA_UPSTREAM_KEY` | Upstream server key (relay-cli only) | — |
+| `KODAMA_UPSTREAM_KEY` | Upstream server key (relay only) | — |
 | `RUST_LOG` | Tracing filter (e.g., `kodama=debug`) | `kodama=info` |
 
 ## Development
