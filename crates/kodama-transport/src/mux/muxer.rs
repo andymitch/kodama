@@ -90,7 +90,6 @@ impl FrameBuffer {
             }
             // No non-keyframes to drop - drop oldest keyframe
             warn!("Dropping keyframe due to buffer overflow");
-            self.stats.keyframes_dropped += 1;
             self.drop_oldest();
             self.last_keyframe_idx = Some(self.buffer.len());
             self.buffer.push_back(frame);
@@ -316,5 +315,114 @@ mod tests {
         let f2 = buffer.pop().unwrap();
         assert!(f1.flags.is_keyframe());
         assert!(f2.flags.is_keyframe());
+    }
+
+    #[test]
+    fn all_keyframes_overflow_drops_incoming_nonkeyframe() {
+        // Buffer full of only keyframes — incoming non-keyframe gets dropped
+        let mut buffer = FrameBuffer::new(2);
+        buffer.push(make_frame(true));
+        buffer.push(make_frame(true));
+
+        // Non-keyframe should be dropped (no non-keyframes to evict)
+        assert!(!buffer.push(make_frame(false)));
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.stats().frames_dropped, 1);
+        assert_eq!(buffer.stats().keyframes_dropped, 0);
+    }
+
+    #[test]
+    fn all_keyframes_overflow_drops_oldest_keyframe_for_new_keyframe() {
+        // Buffer full of keyframes — incoming keyframe evicts oldest keyframe
+        let mut buffer = FrameBuffer::new(2);
+        buffer.push(make_frame(true));
+        buffer.push(make_frame(true));
+
+        assert!(buffer.push(make_frame(true)));
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.stats().frames_dropped, 1);
+        assert_eq!(buffer.stats().keyframes_dropped, 1);
+    }
+
+    #[test]
+    fn pop_tracks_keyframe_index_correctly() {
+        let mut buffer = FrameBuffer::new(4);
+        buffer.push(make_frame(false)); // idx 0
+        buffer.push(make_frame(false)); // idx 1
+        buffer.push(make_frame(true));  // idx 2 — keyframe
+
+        // Pop twice, keyframe index should track
+        buffer.pop(); // removes idx 0, keyframe now at idx 1
+        buffer.pop(); // removes idx 1, keyframe now at idx 0
+
+        let f = buffer.pop().unwrap();
+        assert!(f.flags.is_keyframe());
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn stats_consistency_after_mixed_operations() {
+        let mut buffer = FrameBuffer::new(3);
+
+        // Fill buffer: KF, NKF, NKF
+        buffer.push(make_frame(true));
+        buffer.push(make_frame(false));
+        buffer.push(make_frame(false));
+        assert_eq!(buffer.stats().frames_received, 3);
+
+        // Push another NKF — drops oldest NKF
+        buffer.push(make_frame(false));
+        assert_eq!(buffer.stats().frames_received, 4);
+        assert_eq!(buffer.stats().frames_dropped, 1);
+
+        // Push a KF — drops a NKF to make room
+        buffer.push(make_frame(true));
+        assert_eq!(buffer.stats().frames_received, 5);
+        assert_eq!(buffer.stats().frames_dropped, 2);
+        assert_eq!(buffer.stats().keyframes_received, 2);
+        assert_eq!(buffer.stats().keyframes_dropped, 0);
+    }
+
+    #[test]
+    fn drop_rate_zero_when_no_frames() {
+        let stats = BufferStats::default();
+        assert_eq!(stats.drop_rate(), 0.0);
+    }
+
+    #[test]
+    fn drop_rate_accurate() {
+        let mut buffer = FrameBuffer::new(1);
+        buffer.push(make_frame(true));  // kept
+        buffer.push(make_frame(true));  // evicts oldest keyframe
+        buffer.push(make_frame(false)); // dropped (buffer full of keyframes... actually just 1 KF)
+
+        // 3 received, some dropped
+        let rate = buffer.stats().drop_rate();
+        assert!(rate > 0.0);
+        assert!(rate <= 100.0);
+    }
+
+    #[test]
+    fn pop_on_empty_buffer_returns_none() {
+        let mut buffer = FrameBuffer::new(4);
+        assert!(buffer.pop().is_none());
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn capacity_one_buffer() {
+        let mut buffer = FrameBuffer::new(1);
+
+        buffer.push(make_frame(true)); // fills buffer
+        assert_eq!(buffer.len(), 1);
+
+        // Another keyframe evicts the old one
+        buffer.push(make_frame(true));
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.stats().keyframes_dropped, 1);
+
+        // Non-keyframe gets dropped (only keyframe in buffer)
+        assert!(!buffer.push(make_frame(false)));
+        assert_eq!(buffer.stats().frames_dropped, 2); // 1 KF + 1 NKF dropped
     }
 }

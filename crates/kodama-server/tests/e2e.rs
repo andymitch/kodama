@@ -14,7 +14,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use kodama_core::{Channel, Frame, FrameFlags, SourceId, MAX_FRAME_PAYLOAD_SIZE, ALPN};
+use kodama_core::{
+    Channel, Frame, FrameFlags, SourceId, MAX_FRAME_PAYLOAD_SIZE, ALPN,
+    Command, CommandMessage, CommandResponse, CommandResult,
+    ClientCommandMessage, TargetedCommandRequest,
+};
 use kodama_transport::{Relay, RelayConnection};
 use kodama_server::Router;
 
@@ -238,4 +242,170 @@ async fn rate_limiter_drops_excess_frames() {
     eprintln!("Test 3 PASS: rate limiter active, no panics/deadlocks");
 
     server_task.abort();
+}
+
+/// Test 4: Command routing: client → server → camera → server → client
+///
+/// Verifies the full command pipeline:
+/// 1. Camera connects and registers command channel
+/// 2. Client sends a TargetedCommandRequest via the server
+/// 3. Server routes the command to the camera
+/// 4. Camera responds with a CommandResponse
+/// 5. Server forwards the response back to the client
+#[tokio::test(flavor = "multi_thread")]
+async fn command_routing_client_to_camera() {
+    let server_relay = Arc::new(Relay::new(None).await.unwrap());
+    let camera_relay = Relay::new(None).await.unwrap();
+    let client_relay = Relay::new(None).await.unwrap();
+
+    let server_addr = server_relay.endpoint().endpoint().addr();
+    let router = Router::new(64);
+
+    // --- Camera side ---
+    // Camera connects, opens frame stream (for detection) + command stream
+    let camera_pub_key = camera_relay.public_key();
+    let client_server_addr = server_addr.clone();
+    let camera_task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let conn = camera_relay
+            .endpoint()
+            .endpoint()
+            .connect(server_addr, ALPN)
+            .await
+            .unwrap();
+        let relay_conn = RelayConnection::from_connection(conn);
+
+        // Open frame stream (so server detects us as camera)
+        let sender = relay_conn.open_frame_stream().await.unwrap();
+        // Send one frame so the stream is established
+        sender.send(&video_frame(100, true)).await.unwrap();
+
+        // Open command stream
+        let cmd_stream = relay_conn.open_command_stream().await.unwrap();
+
+        // Send ready signal (id=0)
+        cmd_stream
+            .sender
+            .send(&CommandMessage::Response(CommandResponse {
+                id: 0,
+                result: CommandResult::Ok,
+            }))
+            .await
+            .unwrap();
+
+        // Wait for a command request and respond
+        match cmd_stream.receiver.recv().await.unwrap() {
+            Some(CommandMessage::Request(req)) => {
+                assert!(matches!(req.command, Command::RequestStatus));
+                cmd_stream
+                    .sender
+                    .send(&CommandMessage::Response(CommandResponse {
+                        id: req.id,
+                        result: CommandResult::Ok,
+                    }))
+                    .await
+                    .unwrap();
+            }
+            other => panic!("Expected CommandRequest, got {:?}", other),
+        }
+
+        // Keep connection alive until test completes
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+
+    // --- Server side: accept camera ---
+    let router_clone = router.clone();
+    let server_relay_clone = Arc::clone(&server_relay);
+    let server_camera_task = tokio::spawn(async move {
+        let conn = server_relay_clone.endpoint().accept().await.unwrap();
+        let relay_conn = RelayConnection::from_connection(conn);
+        let remote = relay_conn.remote_public_key();
+
+        // Accept frame stream (camera detection)
+        let receiver = relay_conn.accept_frame_stream().await.unwrap();
+
+        // Accept command stream and register
+        let cmd_stream = relay_conn.accept_command_stream().await.unwrap();
+        router_clone.register_camera_commands(remote, cmd_stream);
+
+        // Handle camera frames (runs until stream closes)
+        router_clone
+            .handle_camera_with_receiver(remote, receiver)
+            .await
+    });
+
+    // Wait for camera to be registered
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // Verify camera command channel is registered
+    let cameras = router.cameras_with_commands().await;
+    assert_eq!(cameras.len(), 1, "Camera command channel should be registered");
+    assert_eq!(cameras[0], camera_pub_key);
+
+    // --- Client side ---
+    let router_clone = router.clone();
+    let server_relay_clone = Arc::clone(&server_relay);
+
+    // Server: accept client connection and handle commands
+    let server_client_task = tokio::spawn(async move {
+        let conn = server_relay_clone.endpoint().accept().await.unwrap();
+        let relay_conn = RelayConnection::from_connection(conn);
+        let remote = relay_conn.remote_public_key();
+
+        // Accept client command stream
+        let cmd_stream = relay_conn.accept_client_command_stream().await.unwrap();
+        router_clone.handle_client_commands(remote, cmd_stream).await;
+    });
+
+    // Client connects and sends a targeted command
+    let camera_key_str = camera_pub_key.to_string();
+    let client_task = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let conn = client_relay
+            .endpoint()
+            .endpoint()
+            .connect(client_server_addr, ALPN)
+            .await
+            .unwrap();
+        let relay_conn = RelayConnection::from_connection(conn);
+
+        // Open client command stream
+        let cmd_stream = relay_conn.open_client_command_stream().await.unwrap();
+
+        // Send targeted command: RequestStatus → camera
+        cmd_stream
+            .sender
+            .send(&ClientCommandMessage::Request(TargetedCommandRequest {
+                id: 1,
+                target_camera: camera_key_str,
+                command: Command::RequestStatus,
+            }))
+            .await
+            .unwrap();
+
+        // Wait for response
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(timeout, cmd_stream.receiver.recv()).await {
+            Ok(Ok(Some(ClientCommandMessage::Response(resp)))) => {
+                assert_eq!(resp.id, 1, "Response ID should match request");
+                assert!(
+                    matches!(resp.result, CommandResult::Ok),
+                    "Expected Ok result, got {:?}",
+                    resp.result
+                );
+                eprintln!("Client received response: {:?}", resp);
+            }
+            Ok(Ok(other)) => panic!("Unexpected message: {:?}", other),
+            Ok(Err(e)) => panic!("Stream error: {}", e),
+            Err(_) => panic!("Timed out waiting for command response"),
+        }
+    });
+
+    client_task.await.unwrap();
+    eprintln!("Test 4 PASS: command routed client → server → camera → server → client");
+
+    camera_task.abort();
+    server_camera_task.abort();
+    server_client_task.abort();
 }
