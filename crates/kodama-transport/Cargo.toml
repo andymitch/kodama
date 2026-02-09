@@ -1,5 +1,5 @@
 [package]
-name = "kodama-relay"
+name = "kodama-transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

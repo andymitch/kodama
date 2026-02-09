@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use kodama_core::{Channel, Frame, FrameFlags, SourceId, MAX_FRAME_PAYLOAD_SIZE, ALPN};
-use kodama_relay::{Relay, RelayConnection};
+use kodama_transport::{Relay, RelayConnection};
 use kodama_server::Router;
 
 fn test_source() -> SourceId {
@@ -124,7 +124,7 @@ async fn oversized_frame_rejected_on_wire() {
     // Verify write_frame rejects oversized frames (no network needed)
     let oversized = video_frame(MAX_FRAME_PAYLOAD_SIZE + 1, true);
     let mut buf = Vec::new();
-    let result = kodama_relay::mux::frame::write_frame(&mut buf, &oversized).await;
+    let result = kodama_transport::mux::frame::write_frame(&mut buf, &oversized).await;
     assert!(result.is_err(), "Expected error for oversized frame");
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -136,7 +136,7 @@ async fn oversized_frame_rejected_on_wire() {
     // Verify a frame at exactly the limit succeeds
     let at_limit = video_frame(MAX_FRAME_PAYLOAD_SIZE, true);
     let mut buf2 = Vec::new();
-    kodama_relay::mux::frame::write_frame(&mut buf2, &at_limit)
+    kodama_transport::mux::frame::write_frame(&mut buf2, &at_limit)
         .await
         .expect("Frame at exact limit should succeed");
     eprintln!("Frame at exact limit ({} bytes) accepted", MAX_FRAME_PAYLOAD_SIZE);
@@ -147,7 +147,7 @@ async fn oversized_frame_rejected_on_wire() {
     bad_buf.extend_from_slice(&bad_len.to_be_bytes());
     bad_buf.extend_from_slice(&vec![0u8; bad_len as usize]);
     let mut cursor = std::io::Cursor::new(bad_buf);
-    let read_result = kodama_relay::mux::frame::read_frame(&mut cursor).await;
+    let read_result = kodama_transport::mux::frame::read_frame(&mut cursor).await;
     assert!(read_result.is_err(), "read_frame should reject oversized length");
     eprintln!("read_frame correctly rejected oversized length prefix");
 

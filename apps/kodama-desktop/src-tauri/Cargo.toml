@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # Kodama crates
 kodama-core = { path = "../../../crates/kodama-core" }
-kodama-relay = { path = "../../../crates/kodama-relay" }
+kodama-transport = { path = "../../../crates/kodama-transport" }
 kodama-server = { path = "../../../crates/kodama-server" }
 kodama-storage = { path = "../../../crates/kodama-storage" }
 kodama-capture = { path = "../../../crates/kodama-capture" }

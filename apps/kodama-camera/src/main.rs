@@ -33,7 +33,7 @@ use kodama_core::{
     ConfigureParams, RecordParams, UpdateFirmwareParams, NetworkParams, NetworkAction,
     DeleteRecordingParams, SendRecordingParams, StreamParams,
 };
-use kodama_relay::{Relay, CommandStream};
+use kodama_transport::{Relay, CommandStream};
 use kodama_capture::{
     h264,
     AbrConfig, AbrController, AbrDecision, QualityTier, ThroughputTracker,

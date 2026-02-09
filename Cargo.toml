@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/kodama-core",
-    "crates/kodama-relay",
+    "crates/kodama-transport",
     "crates/kodama-capture",
     "crates/kodama-storage",
     "crates/kodama-server",
@@ -55,7 +55,7 @@ tempfile = "3"
 
 # Internal crates
 kodama-core = { path = "crates/kodama-core" }
-kodama-relay = { path = "crates/kodama-relay" }
+kodama-transport = { path = "crates/kodama-transport" }
 kodama-capture = { path = "crates/kodama-capture" }
 kodama-storage = { path = "crates/kodama-storage" }
 kodama-server = { path = "crates/kodama-server" }

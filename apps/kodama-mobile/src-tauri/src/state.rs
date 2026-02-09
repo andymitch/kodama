@@ -1,6 +1,6 @@
 //! Application state management for Kodama Mobile
 
-use kodama_relay::Relay;
+use kodama_transport::Relay;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;

@@ -4,7 +4,7 @@
 //! and resource usage on mobile devices.
 
 use crate::state::{AppMode, AppSettings, AppState, CameraInfo, ClientState, ServerState};
-use kodama_relay::Relay;
+use kodama_transport::Relay;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;

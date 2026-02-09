@@ -8,7 +8,7 @@ description = "Storage backends for Kodama recordings"
 
 [dependencies]
 kodama-core = { workspace = true }
-kodama-relay = { workspace = true }
+kodama-transport = { workspace = true }
 tokio = { workspace = true }
 bytes = { workspace = true }
 anyhow = { workspace = true }

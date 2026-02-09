@@ -26,7 +26,7 @@ anyhow = "1"
 
 # Kodama crates
 kodama-core = { path = "../../../crates/kodama-core" }
-kodama-relay = { path = "../../../crates/kodama-relay" }
+kodama-transport = { path = "../../../crates/kodama-transport" }
 kodama-server = { path = "../../../crates/kodama-server" }
 
 [features]

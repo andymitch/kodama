@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 use serde::{Deserialize, Serialize};
 use iroh::PublicKey;
 
-use kodama_relay::Relay;
+use kodama_transport::Relay;
 use kodama_server::{Router, RouterHandle, StorageManager};
 
 /// Application mode

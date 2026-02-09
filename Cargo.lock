@@ -2629,7 +2629,7 @@ dependencies = [
  "iroh",
  "kodama-capture",
  "kodama-core",
- "kodama-relay",
+ "kodama-transport",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2689,9 +2689,9 @@ dependencies = [
  "iroh",
  "kodama-capture",
  "kodama-core",
- "kodama-relay",
  "kodama-server",
  "kodama-storage",
+ "kodama-transport",
  "rmp-serde",
  "serde",
  "serde_json",
@@ -2710,8 +2710,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "kodama-core",
- "kodama-relay",
  "kodama-server",
+ "kodama-transport",
  "serde",
  "serde_json",
  "tauri",
@@ -2725,24 +2725,9 @@ name = "kodama-relay"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytes",
  "iroh",
  "kodama-core",
- "rand 0.9.2",
- "rmp-serde",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "kodama-relay-bin"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "iroh",
- "kodama-core",
- "kodama-relay",
+ "kodama-transport",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2756,8 +2741,8 @@ dependencies = [
  "bytes",
  "iroh",
  "kodama-core",
- "kodama-relay",
  "kodama-storage",
+ "kodama-transport",
  "tempfile",
  "tokio",
  "tracing",
@@ -2771,8 +2756,23 @@ dependencies = [
  "async-trait",
  "bytes",
  "kodama-core",
- "kodama-relay",
+ "kodama-transport",
  "libc",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kodama-transport"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "iroh",
+ "kodama-core",
+ "rand 0.9.2",
+ "rmp-serde",
  "tempfile",
  "tokio",
  "tracing",

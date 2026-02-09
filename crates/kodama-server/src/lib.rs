@@ -17,7 +17,7 @@ pub use clients::{ClientManager, ClientPermissions, ClientInfo};
 pub use storage::{StorageManager, StorageConfig, StorageStats};
 
 // Re-export Relay and related types for convenience
-pub use kodama_relay::{Relay, RelayConnection, FrameReceiver, FrameSender};
-pub use kodama_relay::{CommandSender, CommandReceiver, CommandStream};
-pub use kodama_relay::{ClientCommandSender, ClientCommandReceiver, ClientCommandStream};
+pub use kodama_transport::{Relay, RelayConnection, FrameReceiver, FrameSender};
+pub use kodama_transport::{CommandSender, CommandReceiver, CommandStream};
+pub use kodama_transport::{ClientCommandSender, ClientCommandReceiver, ClientCommandStream};
 pub use kodama_storage::{StorageBackend, LocalStorage, LocalStorageConfig, CloudStorage, CloudStorageConfig};

@@ -12,7 +12,7 @@ test-source = ["kodama-capture/test-source"]
 
 [dependencies]
 kodama-core = { workspace = true }
-kodama-relay = { workspace = true }
+kodama-transport = { workspace = true }
 kodama-capture = { workspace = true }
 tokio = { workspace = true }
 iroh = { workspace = true }

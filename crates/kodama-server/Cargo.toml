@@ -8,7 +8,7 @@ description = "Server logic library for Kodama (Router, ClientManager, StorageMa
 
 [dependencies]
 kodama-core = { workspace = true }
-kodama-relay = { workspace = true }
+kodama-transport = { workspace = true }
 kodama-storage = { workspace = true }
 tokio = { workspace = true }
 iroh = { workspace = true }

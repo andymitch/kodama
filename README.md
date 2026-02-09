@@ -72,7 +72,7 @@ kodama/
 ├── crates/                    # Library crates
 │   ├── kodama-core/           #   Frame format, Channel enum, SourceId, ALPN protocol
 │   ├── kodama-capture/        #   Video/audio/telemetry capture, H.264 parsing, ABR
-│   ├── kodama-relay/          #   Iroh endpoint wrapper, frame serialization (mux/)
+│   ├── kodama-transport/       #   Iroh endpoint wrapper, frame serialization (mux/)
 │   ├── kodama-server/         #   Router, rate limiting, ClientManager, StorageManager
 │   └── kodama-storage/        #   StorageBackend trait (local filesystem, S3/R2)
 ├── apps/                      # Application binaries

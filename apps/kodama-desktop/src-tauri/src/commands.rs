@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 
 use kodama_core::{Channel, Frame, SourceId};
-use kodama_relay::Relay;
+use kodama_transport::Relay;
 use kodama_server::{
     Router, StorageManager, StorageConfig as ServerStorageConfig,
     LocalStorage, LocalStorageConfig, StorageBackend,

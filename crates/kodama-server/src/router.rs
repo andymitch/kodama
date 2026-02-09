@@ -13,7 +13,7 @@ use kodama_core::{
     Frame, Command, CommandMessage, CommandRequest, CommandResponse, CommandResult,
     ClientCommandMessage,
 };
-use kodama_relay::{
+use kodama_transport::{
     RelayConnection, FrameReceiver,
     CommandSender, CommandStream, ClientCommandStream,
 };

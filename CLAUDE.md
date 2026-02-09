@@ -18,7 +18,7 @@ This pins crypto dependencies (`sha2`, `digest`) to specific versions needed for
 ```bash
 cargo build                        # All workspace crates
 cargo build -p kodama-cli          # TUI server
-cargo build -p kodama-relay-bin    # Standalone relay
+cargo build -p kodama-relay        # Standalone relay
 cargo build -p kodama-camera       # Camera
 cargo build -p kodama-camera --features test-source  # With synthetic test source
 ```
@@ -37,7 +37,7 @@ cargo test -p kodama-server --test e2e  # E2E regression suite (real QUIC, no ha
 cargo run -p kodama-cli
 
 # Standalone relay (lightweight frame forwarder)
-cargo run -p kodama-relay-bin
+cargo run -p kodama-relay
 
 # Camera (requires server key)
 KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-camera
@@ -106,7 +106,7 @@ Kodama is a privacy-focused P2P security camera system using Iroh for transport.
 **Library crates** (`crates/`):
 - **kodama-core** - Frame type, Channel enum, SourceId, protocol constants (ALPN: "kodama/0")
 - **kodama-capture** - Video/audio/telemetry capture, H.264 keyframe detection
-- **kodama-relay** - Iroh endpoint wrapper (`transport/`) and frame serialization (`mux/`)
+- **kodama-transport** - Iroh endpoint wrapper (`transport/`) and frame serialization (`mux/`)
 - **kodama-server** - Router (broadcast channel), ClientManager, StorageManager
 - **kodama-storage** - StorageBackend trait with local filesystem and cloud (S3/R2) implementations
 
@@ -133,7 +133,7 @@ Channels: Video(0), Audio(1), Telemetry(2). Flags include KEYFRAME (0x01).
 - `Relay` - wraps Iroh endpoint, handles connections
 - `RelayConnection::open_frame_stream()` - persistent QUIC stream for frames
 - `Router` - broadcasts frames to clients via `tokio::sync::broadcast`
-- `relay::mux::frame::{read_frame, write_frame}` - all binary frame I/O goes through here
+- `transport::mux::frame::{read_frame, write_frame}` - all binary frame I/O goes through here
 
 ### Peer Detection
 Cameras open a frame stream immediately (they're senders). Clients wait for the server to open a stream to them.

@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use kodama_core::{Frame, SourceId};
-use kodama_relay::mux::frame::{frame_from_bytes, frame_to_bytes};
+use kodama_transport::mux::frame::{frame_from_bytes, frame_to_bytes};
 use crate::StorageBackend;
 
 /// Configuration for local storage

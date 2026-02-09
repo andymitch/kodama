@@ -25,7 +25,7 @@ use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
 use kodama_core::Frame;
-use kodama_relay::{FrameReceiver, Relay};
+use kodama_transport::{FrameReceiver, Relay};
 
 struct RelayStats {
     cameras: AtomicUsize,
@@ -194,7 +194,7 @@ async fn handle_camera(
 }
 
 async fn handle_client(
-    conn: kodama_relay::RelayConnection,
+    conn: kodama_transport::RelayConnection,
     tx: broadcast::Sender<Frame>,
     stats: Arc<RelayStats>,
 ) {

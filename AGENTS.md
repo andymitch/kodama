@@ -18,14 +18,14 @@ This file provides guidance to AI coding agents when working with code in this r
   - `cargo build --release`
 - Build specific binaries:
   - `cargo build -p kodama-cli`
-  - `cargo build -p kodama-relay-bin`
+  - `cargo build -p kodama-relay`
   - `cargo build -p kodama-camera`
 
 ### Tests
 - Run all tests:
   - `cargo test`
-- Run tests for a specific module (example: relay):
-  - `cargo test -p kodama-relay` *(filters by package)*
+- Run tests for a specific module (example: transport):
+  - `cargo test -p kodama-transport` *(filters by package)*
 - Run a single test by name (substring match):
   - `cargo test <test_name_substring>`
 - Run E2E regression suite:
@@ -43,11 +43,11 @@ This file provides guidance to AI coding agents when working with code in this r
 
 #### Standalone Relay
 - Run a lightweight relay (frame forwarder, no storage or rate limiting):
-  - `cargo run -p kodama-relay-bin`
+  - `cargo run -p kodama-relay`
 - Run relay with explicit key path:
-  - `KODAMA_KEY_PATH=./relay.key cargo run -p kodama-relay-bin`
+  - `KODAMA_KEY_PATH=./relay.key cargo run -p kodama-relay`
 - Relay that forwards everything to an upstream server while also serving local clients:
-  - `KODAMA_UPSTREAM_KEY=<server_public_key> cargo run -p kodama-relay-bin`
+  - `KODAMA_UPSTREAM_KEY=<server_public_key> cargo run -p kodama-relay`
 
 #### Camera
 - Environment variable required by all camera runs:
@@ -71,11 +71,11 @@ This file provides guidance to AI coding agents when working with code in this r
 - Cargo workspace with library crates in `crates/` and application crates in `apps/`:
   - `crates/kodama-core` – Frame type, Channel enum, SourceId, protocol constants (ALPN: "kodama/0").
   - `crates/kodama-capture` – Video/audio/telemetry capture, H.264 keyframe detection, ABR.
-  - `crates/kodama-relay` – Iroh endpoint wrapper (`transport/`) and frame mux/demux (`mux/`).
+  - `crates/kodama-transport` – Iroh endpoint wrapper (`transport/`) and frame mux/demux (`mux/`).
   - `crates/kodama-server` – Router (broadcast), ClientManager, StorageManager, rate limiting.
   - `crates/kodama-storage` – StorageBackend trait with local filesystem and cloud (S3/R2) implementations.
   - `apps/kodama-cli` – TUI server binary (interactive dashboard or headless logging).
-  - `apps/kodama-relay` – Standalone relay binary (lightweight frame forwarder). Package name: `kodama-relay-bin`.
+  - `apps/kodama-relay` – Standalone relay binary (lightweight frame forwarder).
   - `apps/kodama-camera` – Camera capture binary.
   - `apps/kodama-desktop` – Tauri + SvelteKit desktop app (server + client).
   - `apps/kodama-mobile` – Tauri + SvelteKit mobile app (stub).
@@ -90,10 +90,10 @@ Conceptually the system follows a three-module design:
   - Uses `Relay` to connect to a server/relay and send `Frame` objects over a persistent Iroh stream.
   - All capture channels are funneled through a single `mpsc` channel (`CaptureMessage`) for multiplexing.
 
-- **Relay module (relay/ and kodama-relay binary):**
-  - `relay::transport` wraps the Iroh `Endpoint` (as `KodamaEndpoint`) and provides connection primitives.
-  - `relay::mux` handles serialization and de/serialization of `Frame` to raw bytes and back.
-  - `kodama-relay` (package: `kodama-relay-bin`) embeds a lightweight router built on `broadcast::Sender<Frame>`:
+- **Transport module (transport/ and kodama-relay binary):**
+  - `transport::transport` wraps the Iroh `Endpoint` (as `KodamaEndpoint`) and provides connection primitives.
+  - `transport::mux` handles serialization and de/serialization of `Frame` to raw bytes and back.
+  - `kodama-relay` embeds a lightweight router built on `broadcast::Sender<Frame>`:
     - Cameras push frames into the broadcast channel.
     - Clients subscribe and receive frames over a persistent stream.
     - Optional upstream connection pushes frames to a full server instance.
@@ -116,7 +116,7 @@ At the heart of the system is `core::Frame`:
 
 The serialized frame format (see `core::protocol`) includes:
 - Fixed-size header (source id, channel, flags, timestamp, length) followed by payload bytes.
-- `relay::mux::frame` is the single place that converts between `Frame` and bytes; all binaries route binary I/O through this layer.
+- `transport::mux::frame` is the single place that converts between `Frame` and bytes; all binaries route binary I/O through this layer.
 
 ### Binary responsibilities and interaction patterns
 
@@ -150,7 +150,7 @@ The serialized frame format (see `core::protocol`) includes:
 ### How to extend or modify behavior
 
 When changing behavior, prefer to work with the existing abstraction layers:
-- **Transport and framing:** Use `Relay`, `RelayConnection`, and `relay::mux` helpers rather than touching Iroh primitives directly.
+- **Transport and framing:** Use `Relay`, `RelayConnection`, and `transport::mux` helpers rather than touching Iroh primitives directly.
 - **Routing/recording:** Use `Router` + `StorageManager` APIs instead of re-implementing broadcast or storage loops.
 - **Capture/telemetry:** Extend the `capture` module (and `CaptureMessage` in the camera binary) when adding new sensor channels, then map them to new `Channel` variants if needed.
 
