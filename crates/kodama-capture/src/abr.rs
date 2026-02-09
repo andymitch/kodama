@@ -405,4 +405,167 @@ mod tests {
         assert_eq!(format!("{}", QualityTier::Low), "Low");
         assert_eq!(format!("{}", QualityTier::Minimum), "Minimum");
     }
+
+    // ========== ABR + Throughput integration tests ==========
+
+    use crate::ThroughputTracker;
+    use std::thread;
+
+    /// Simulate the camera send loop: record bytes → measure throughput → feed to ABR.
+    /// Verifies that sustained high throughput causes upgrades from Minimum → Low → Medium → High.
+    #[test]
+    fn throughput_driven_upgrade_ramp() {
+        let config = AbrConfig {
+            downgrade_after: Duration::from_millis(100),
+            upgrade_after: Duration::from_millis(150),
+            cooldown: Duration::from_millis(50),
+        };
+        let mut abr = AbrController::new_at(config, QualityTier::Minimum);
+        abr.last_change = Instant::now() - Duration::from_secs(10);
+
+        let mut tracker = ThroughputTracker::new(Duration::from_secs(1));
+
+        // Simulate sending data at ~5 Mbps (625 KB/s) for a sustained period.
+        // This is above the upgrade threshold for every tier up to High.
+        // Minimum upgrade threshold = 500K * 0.9 = 450 Kbps
+        // Low upgrade threshold = 1M * 0.9 = 900 Kbps
+        // Medium upgrade threshold = 2M * 0.9 = 1.8 Mbps
+        let bytes_per_tick = 62_500; // 62.5 KB per 100ms = 5 Mbps
+        let mut upgrades = vec![];
+
+        for _ in 0..30 {
+            tracker.record(bytes_per_tick);
+            thread::sleep(Duration::from_millis(100));
+
+            let bps = tracker.bits_per_second();
+            let decision = abr.evaluate(bps);
+            if let AbrDecision::ChangeTo(tier) = decision {
+                upgrades.push(tier);
+                // Reset last_change to skip cooldown for test speed
+                abr.last_change = Instant::now() - Duration::from_secs(10);
+            }
+        }
+
+        assert!(
+            upgrades.contains(&QualityTier::Low),
+            "Should upgrade to Low, got: {upgrades:?}"
+        );
+        assert!(
+            upgrades.contains(&QualityTier::Medium),
+            "Should upgrade to Medium, got: {upgrades:?}"
+        );
+        assert!(
+            upgrades.contains(&QualityTier::High),
+            "Should upgrade to High, got: {upgrades:?}"
+        );
+        assert_eq!(abr.current_tier(), QualityTier::High);
+    }
+
+    /// Simulate congestion: start at High, feed low throughput → ABR downgrades.
+    #[test]
+    fn throughput_driven_downgrade_on_congestion() {
+        let config = AbrConfig {
+            downgrade_after: Duration::from_millis(150),
+            upgrade_after: Duration::from_millis(500),
+            cooldown: Duration::from_millis(50),
+        };
+        let mut abr = AbrController::new_at(config, QualityTier::High);
+        abr.last_change = Instant::now() - Duration::from_secs(10);
+
+        let mut tracker = ThroughputTracker::new(Duration::from_secs(1));
+
+        // Simulate sending data at ~200 Kbps (25 KB/s) — well below every tier's
+        // downgrade threshold. High downgrade = 2 Mbps, so 200 Kbps is way below.
+        let bytes_per_tick = 2_500; // 2.5 KB per 100ms = 200 Kbps
+        let mut downgrades = vec![];
+
+        for _ in 0..30 {
+            tracker.record(bytes_per_tick);
+            thread::sleep(Duration::from_millis(100));
+
+            let bps = tracker.bits_per_second();
+            let decision = abr.evaluate(bps);
+            if let AbrDecision::ChangeTo(tier) = decision {
+                downgrades.push(tier);
+                abr.last_change = Instant::now() - Duration::from_secs(10);
+            }
+        }
+
+        assert!(
+            downgrades.contains(&QualityTier::Medium),
+            "Should downgrade to Medium, got: {downgrades:?}"
+        );
+        assert!(
+            downgrades.contains(&QualityTier::Low),
+            "Should downgrade to Low, got: {downgrades:?}"
+        );
+        assert!(
+            downgrades.contains(&QualityTier::Minimum),
+            "Should downgrade to Minimum, got: {downgrades:?}"
+        );
+        assert_eq!(abr.current_tier(), QualityTier::Minimum);
+    }
+
+    /// Simulate the real camera pattern: start at Minimum on reconnect,
+    /// ramp throughput, then hit congestion and recover.
+    #[test]
+    fn throughput_driven_ramp_then_congestion_then_recovery() {
+        let config = AbrConfig {
+            downgrade_after: Duration::from_millis(150),
+            upgrade_after: Duration::from_millis(150),
+            cooldown: Duration::from_millis(50),
+        };
+        let mut abr = AbrController::new_at(config, QualityTier::Minimum);
+        abr.last_change = Instant::now() - Duration::from_secs(10);
+
+        let mut tracker = ThroughputTracker::new(Duration::from_millis(500));
+
+        // Phase 1: High throughput → ramp up
+        for _ in 0..20 {
+            tracker.record(62_500); // ~5 Mbps
+            thread::sleep(Duration::from_millis(100));
+            let decision = abr.evaluate(tracker.bits_per_second());
+            if let AbrDecision::ChangeTo(_) = decision {
+                abr.last_change = Instant::now() - Duration::from_secs(10);
+            }
+        }
+        let tier_after_ramp = abr.current_tier();
+        assert!(
+            tier_after_ramp >= QualityTier::Medium,
+            "Should have ramped up, at {tier_after_ramp}"
+        );
+
+        // Phase 2: Congestion — throughput collapses
+        // Use a fresh tracker so old high samples don't inflate the average
+        let mut tracker2 = ThroughputTracker::new(Duration::from_millis(500));
+        for _ in 0..20 {
+            tracker2.record(1_000); // ~80 Kbps
+            thread::sleep(Duration::from_millis(100));
+            let decision = abr.evaluate(tracker2.bits_per_second());
+            if let AbrDecision::ChangeTo(_) = decision {
+                abr.last_change = Instant::now() - Duration::from_secs(10);
+            }
+        }
+        assert_eq!(
+            abr.current_tier(),
+            QualityTier::Minimum,
+            "Should have downgraded to Minimum under congestion"
+        );
+
+        // Phase 3: Recovery — throughput returns
+        let mut tracker3 = ThroughputTracker::new(Duration::from_millis(500));
+        for _ in 0..20 {
+            tracker3.record(62_500); // ~5 Mbps
+            thread::sleep(Duration::from_millis(100));
+            let decision = abr.evaluate(tracker3.bits_per_second());
+            if let AbrDecision::ChangeTo(_) = decision {
+                abr.last_change = Instant::now() - Duration::from_secs(10);
+            }
+        }
+        assert!(
+            abr.current_tier() >= QualityTier::Medium,
+            "Should have recovered, at {}",
+            abr.current_tier()
+        );
+    }
 }
