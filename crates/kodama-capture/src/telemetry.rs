@@ -652,7 +652,8 @@ fn parse_meminfo_value(line: &str) -> Result<u64> {
     }
 }
 
-/// Read disk usage using statvfs
+/// Read disk usage using statvfs (Unix only)
+#[cfg(unix)]
 fn read_disk_usage(path: &str) -> Result<(u64, u64)> {
     use std::ffi::CString;
     let c_path = CString::new(path).context("Invalid path")?;
@@ -666,6 +667,11 @@ fn read_disk_usage(path: &str) -> Result<(u64, u64)> {
         let used = total - available;
         Ok((used, total))
     }
+}
+
+#[cfg(not(unix))]
+fn read_disk_usage(_path: &str) -> Result<(u64, u64)> {
+    anyhow::bail!("Disk usage not supported on this platform")
 }
 
 /// Read network stats from /proc/net/dev

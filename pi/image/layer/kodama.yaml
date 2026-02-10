@@ -1,0 +1,75 @@
+name: kodama
+packages:
+  - rpicam-apps
+  - alsa-utils
+  - gpsd
+  - gpsd-clients
+  - modemmanager
+  - network-manager
+  - libqmi-utils
+  - usb-modeswitch
+  - openssh-server
+  - jq
+  - curl
+  - htop
+
+files:
+  # Camera binary (placed by CI from .deb or manually)
+  - source: ../../image/files/kodama-env.example
+    dest: /etc/kodama/env.example
+
+  - source: ../../image/files/motd
+    dest: /etc/motd
+
+  # Systemd services
+  - source: ../../systemd/kodama-camera.service
+    dest: /lib/systemd/system/kodama-camera.service
+
+  - source: ../../systemd/kodama-gps.service
+    dest: /lib/systemd/system/kodama-gps.service
+
+  # GPS
+  - source: ../../kodama-enable-gps.sh
+    dest: /usr/local/bin/kodama-enable-gps.sh
+    mode: "0755"
+
+  - source: ../../gpsd.conf
+    dest: /etc/default/gpsd
+
+  # NetworkManager
+  - source: ../../networkmanager/no-connectivity-check.conf
+    dest: /etc/NetworkManager/conf.d/no-connectivity-check.conf
+
+  - source: ../../networkmanager/99-keep-cellular-route
+    dest: /etc/NetworkManager/dispatcher.d/99-keep-cellular-route
+    mode: "0755"
+
+firmware_config:
+  # Auto-detect camera
+  - camera_auto_detect=1
+  - dtoverlay=imx219
+
+services:
+  enable:
+    - ssh
+    - kodama-camera
+    - kodama-gps
+
+users:
+  - name: yurei
+    password: password
+    groups:
+      - video
+      - dialout
+      - audio
+      - sudo
+
+directories:
+  - path: /var/lib/kodama
+    owner: yurei
+    group: yurei
+    mode: "0755"
+  - path: /etc/kodama
+    owner: root
+    group: root
+    mode: "0755"

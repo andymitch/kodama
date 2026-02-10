@@ -1,0 +1,101 @@
+name: CLI Alpha Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'apps/kodama-cli/**'
+      - '.github/workflows/cli-alpha.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clean-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete existing cli-alpha release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete cli-alpha --yes 2>/dev/null || true
+          git push origin :refs/tags/cli-alpha 2>/dev/null || true
+
+  build:
+    needs: clean-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Pin crypto dependencies
+        run: |
+          cargo update -p sha2 --precise 0.11.0-rc.4 || cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
+          cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p kodama-cli
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../kodama-cli-${{ matrix.target }}.tar.gz kodama-cli
+        shell: bash
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../kodama-cli-${{ matrix.target }}.zip kodama-cli.exe
+        shell: bash
+
+      - name: Set short SHA
+        shell: bash
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cli-alpha
+          name: "CLI Alpha (${{ env.SHORT_SHA }})"
+          prerelease: true
+          body: |
+            Rolling alpha build of `kodama-cli` from `main` at ${{ github.sha }}.
+
+            **Downloads:**
+            - macOS (Apple Silicon): `kodama-cli-aarch64-apple-darwin.tar.gz`
+            - macOS (Intel): `kodama-cli-x86_64-apple-darwin.tar.gz`
+            - Linux (x86_64): `kodama-cli-x86_64-unknown-linux-gnu.tar.gz`
+            - Windows (x86_64): `kodama-cli-x86_64-pc-windows-msvc.zip`
+          files: kodama-cli-${{ matrix.target }}.${{ matrix.archive }}

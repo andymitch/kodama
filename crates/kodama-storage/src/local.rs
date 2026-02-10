@@ -364,21 +364,28 @@ impl StorageBackend for LocalStorage {
     }
 
     async fn available_bytes(&self) -> Result<Option<u64>> {
-        let path = self.config.root_path.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            use std::ffi::CString;
-            let c_path = CString::new(path.to_str().unwrap_or("/"))
-                .map_err(|e| anyhow::anyhow!("Invalid path: {}", e))?;
-            unsafe {
-                let mut stat: libc::statvfs = std::mem::zeroed();
-                if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
-                    anyhow::bail!("statvfs failed: {}", std::io::Error::last_os_error());
+        #[cfg(unix)]
+        {
+            let path = self.config.root_path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                use std::ffi::CString;
+                let c_path = CString::new(path.to_str().unwrap_or("/"))
+                    .map_err(|e| anyhow::anyhow!("Invalid path: {}", e))?;
+                unsafe {
+                    let mut stat: libc::statvfs = std::mem::zeroed();
+                    if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+                        anyhow::bail!("statvfs failed: {}", std::io::Error::last_os_error());
+                    }
+                    let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+                    Ok(Some(available))
                 }
-                let available = stat.f_bavail as u64 * stat.f_frsize as u64;
-                Ok(Some(available))
-            }
-        }).await??;
-        Ok(result)
+            }).await??;
+            Ok(result)
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(None)
+        }
     }
 }
 

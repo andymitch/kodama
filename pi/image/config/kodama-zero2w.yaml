@@ -1,0 +1,4 @@
+name: kodama-zero2w
+device: rpizero2w
+layers:
+  - ../layer/kodama.yaml

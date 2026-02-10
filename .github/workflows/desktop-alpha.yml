@@ -1,0 +1,146 @@
+name: Desktop Alpha Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'apps/kodama-desktop/**'
+      - '.github/workflows/desktop-alpha.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clean-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete existing desktop-alpha release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete desktop-alpha --yes 2>/dev/null || true
+          git push origin :refs/tags/desktop-alpha 2>/dev/null || true
+
+  build:
+    needs: clean-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    env:
+      APPLE_SIGN_AVAILABLE: ${{ secrets.APPLE_CERTIFICATE != '' && 'true' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/kodama-desktop/src-tauri -> target
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Pin crypto dependencies
+        run: |
+          cargo update -p sha2 --precise 0.11.0-rc.4 || cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
+          cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
+
+      - name: Install frontend dependencies
+        run: cd apps/kodama-desktop && bun install
+
+      - name: Import macOS certificate
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+
+      - name: Import Windows certificate
+        if: matrix.platform == 'windows-latest' && env.WINDOWS_SIGN_AVAILABLE
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: powershell
+        run: |
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $certPath = Join-Path $env:RUNNER_TEMP "certificate.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)
+          Remove-Item $certPath
+
+      - name: Set short SHA
+        shell: bash
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Build Tauri app (signed)
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: desktop-alpha
+          releaseName: "Desktop Alpha (${{ env.SHORT_SHA }})"
+          releaseBody: |
+            Rolling alpha build of Kodama Desktop from `main` at ${{ github.sha }}.
+          prerelease: true
+          projectPath: apps/kodama-desktop
+          args: ${{ matrix.args }}
+
+      - name: Build Tauri app
+        if: "!(startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE)"
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: desktop-alpha
+          releaseName: "Desktop Alpha (${{ env.SHORT_SHA }})"
+          releaseBody: |
+            Rolling alpha build of Kodama Desktop from `main` at ${{ github.sha }}.
+          prerelease: true
+          projectPath: apps/kodama-desktop
+          args: ${{ matrix.args }}

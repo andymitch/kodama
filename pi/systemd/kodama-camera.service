@@ -1,0 +1,18 @@
+[Unit]
+Description=Kodama Camera
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yurei
+Group=yurei
+SupplementaryGroups=video dialout audio
+ExecStart=/usr/local/bin/kodama-camera
+Restart=always
+RestartSec=5
+EnvironmentFile=-/etc/kodama/env
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+KODAMA_SERVER_KEY=
+KODAMA_KEY_PATH=/var/lib/kodama/camera.key
+RUST_LOG=info

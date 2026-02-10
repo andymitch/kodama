@@ -1,0 +1,4 @@
+name: kodama-pi4
+device: rpi4
+layers:
+  - ../layer/kodama.yaml

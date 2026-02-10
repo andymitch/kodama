@@ -1,0 +1,435 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_deb:
+        description: 'Build .deb package'
+        type: boolean
+        default: true
+      build_image:
+        description: 'Build Pi SD card image'
+        type: boolean
+        default: false
+      build_cli:
+        description: 'Build CLI binaries'
+        type: boolean
+        default: true
+      build_desktop:
+        description: 'Build Desktop app'
+        type: boolean
+        default: true
+      pi_model:
+        description: 'Pi model for image build'
+        type: choice
+        options:
+          - zero2w
+          - pi4
+          - pi5
+        default: zero2w
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-camera-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build cross-compiler image
+        run: docker build -t kodama-cross -f docker/Dockerfile.cross .
+
+      - name: Cross-compile camera binary
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/app" \
+            -w /app \
+            kodama-cross \
+            bash -c '
+              rustup target add aarch64-unknown-linux-gnu
+
+              cargo update -p sha2 --precise 0.11.0-rc.4 || \
+                cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
+              cargo update -p digest --precise 0.11.0-rc.9 || \
+                cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
+
+              cargo build --target aarch64-unknown-linux-gnu --release -p kodama-camera
+            '
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodama-camera-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/kodama-camera
+
+  build-deb:
+    needs: build-camera-binary
+    if: inputs.build_deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: kodama-camera-aarch64
+          path: bin/
+
+      - name: Get version from tag
+        run: |
+          # Use git tag if available (e.g. v0.1.0 → 0.1.0), else workspace version + SHA
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" =~ ^v[0-9] ]]; then
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.1.0-$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Build .deb package
+        run: |
+          PKG="kodama-camera_${VERSION}_arm64"
+          mkdir -p "${PKG}/DEBIAN"
+          mkdir -p "${PKG}/usr/local/bin"
+          mkdir -p "${PKG}/lib/systemd/system"
+          mkdir -p "${PKG}/etc/kodama"
+          mkdir -p "${PKG}/etc/NetworkManager/conf.d"
+          mkdir -p "${PKG}/etc/NetworkManager/dispatcher.d"
+
+          # Binary
+          cp bin/kodama-camera "${PKG}/usr/local/bin/"
+          chmod 755 "${PKG}/usr/local/bin/kodama-camera"
+
+          # Systemd services
+          cp pi/systemd/kodama-camera.service "${PKG}/lib/systemd/system/"
+          cp pi/systemd/kodama-gps.service "${PKG}/lib/systemd/system/"
+
+          # GPS
+          cp pi/kodama-enable-gps.sh "${PKG}/usr/local/bin/"
+          chmod 755 "${PKG}/usr/local/bin/kodama-enable-gps.sh"
+          cp pi/gpsd.conf "${PKG}/etc/kodama/gpsd.conf"
+
+          # NetworkManager
+          cp pi/networkmanager/no-connectivity-check.conf "${PKG}/etc/NetworkManager/conf.d/"
+          cp pi/networkmanager/99-keep-cellular-route "${PKG}/etc/NetworkManager/dispatcher.d/"
+          chmod 755 "${PKG}/etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
+
+          # Env template
+          cp pi/image/files/kodama-env.example "${PKG}/etc/kodama/env.example"
+
+          # Control file
+          cat > "${PKG}/DEBIAN/control" << EOF
+          Package: kodama-camera
+          Version: ${VERSION}
+          Section: misc
+          Priority: optional
+          Architecture: arm64
+          Depends: gpsd, modemmanager, network-manager, alsa-utils
+          Maintainer: Andy Mitchell <andy@kodama.dev>
+          Description: Kodama camera - privacy-focused P2P security camera
+           Captures video, audio, and telemetry from a Raspberry Pi camera
+           and streams over Iroh QUIC to a Kodama server.
+          EOF
+
+          # Post-install script
+          cat > "${PKG}/DEBIAN/postinst" << 'EOF'
+          #!/bin/bash
+          set -e
+          mkdir -p /var/lib/kodama
+          chown yurei:yurei /var/lib/kodama
+          mkdir -p /etc/kodama
+          if [ ! -f /etc/kodama/env ]; then
+              cp /etc/kodama/env.example /etc/kodama/env
+          fi
+          # Install gpsd config (don't conflict with gpsd package)
+          cp /etc/kodama/gpsd.conf /etc/default/gpsd 2>/dev/null || true
+          systemctl daemon-reload
+          EOF
+          chmod 755 "${PKG}/DEBIAN/postinst"
+
+          dpkg-deb --build "${PKG}"
+          echo "DEB_FILE=${PKG}.deb" >> $GITHUB_ENV
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodama-camera-deb
+          path: ${{ env.DEB_FILE }}
+
+  build-pi-image:
+    needs: build-deb
+    if: inputs.build_image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: kodama-camera-deb
+          path: deb/
+
+      - name: Clone rpi-image-gen
+        run: git clone --depth 1 https://github.com/nicholasgasior/rpi-image-gen.git /tmp/rpi-image-gen
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support debootstrap
+
+      - name: Build Pi image
+        run: |
+          MODEL="${{ inputs.pi_model }}"
+          CONFIG="pi/image/config/kodama-${MODEL}.yaml"
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "Unknown model: ${MODEL}"
+            exit 1
+          fi
+
+          # Place .deb where the image builder can find it
+          cp deb/*.deb pi/image/files/
+
+          sudo /tmp/rpi-image-gen/build.sh \
+            --config "$CONFIG" \
+            --output "kodama-${MODEL}.img"
+
+          xz -9 "kodama-${MODEL}.img"
+          echo "IMG_FILE=kodama-${MODEL}.img.xz" >> $GITHUB_ENV
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodama-pi-image-${{ inputs.pi_model }}
+          path: ${{ env.IMG_FILE }}
+
+  build-cli:
+    if: inputs.build_cli
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Pin crypto dependencies
+        run: |
+          cargo update -p sha2 --precise 0.11.0-rc.4 || cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
+          cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p kodama-cli
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../kodama-cli-${{ matrix.target }}.tar.gz kodama-cli
+        shell: bash
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../kodama-cli-${{ matrix.target }}.zip kodama-cli.exe
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodama-cli-${{ matrix.target }}
+          path: kodama-cli-${{ matrix.target }}.${{ matrix.archive }}
+
+  build-desktop:
+    if: inputs.build_desktop
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    env:
+      APPLE_SIGN_AVAILABLE: ${{ secrets.APPLE_CERTIFICATE != '' && 'true' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/kodama-desktop/src-tauri -> target
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Pin crypto dependencies
+        run: |
+          cargo update -p sha2 --precise 0.11.0-rc.4 || cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
+          cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
+
+      - name: Install frontend dependencies
+        run: cd apps/kodama-desktop && bun install
+
+      - name: Import macOS certificate
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+
+      - name: Import Windows certificate
+        if: matrix.platform == 'windows-latest' && env.WINDOWS_SIGN_AVAILABLE
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: powershell
+        run: |
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          $certPath = Join-Path $env:RUNNER_TEMP "certificate.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          Import-PfxCertificate -FilePath $certPath -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force)
+          Remove-Item $certPath
+
+      - name: Build Tauri app (signed)
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: apps/kodama-desktop
+          args: ${{ matrix.args }}
+
+      - name: Build Tauri app
+        if: "!(startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE)"
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/kodama-desktop
+          args: ${{ matrix.args }}
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodama-desktop-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: |
+            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.dmg
+            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.AppImage
+            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.deb
+            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.msi
+            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.exe
+            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.dmg
+            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.AppImage
+            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.deb
+            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.msi
+            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.exe
+
+  release:
+    needs: [build-deb, build-pi-image, build-cli, build-desktop]
+    if: |
+      always() &&
+      (needs.build-deb.result == 'success' || needs.build-deb.result == 'skipped') &&
+      (needs.build-cli.result == 'success' || needs.build-cli.result == 'skipped') &&
+      (needs.build-desktop.result == 'success' || needs.build-desktop.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" =~ ^v[0-9] ]]; then
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.1.0-$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Collect release files
+        run: |
+          mkdir -p release/
+
+          # Camera .deb
+          cp artifacts/kodama-camera-deb/*.deb release/ 2>/dev/null || true
+
+          # Pi image
+          cp artifacts/kodama-pi-image-*/*.img.xz release/ 2>/dev/null || true
+
+          # CLI archives
+          cp artifacts/kodama-cli-*/*.tar.gz release/ 2>/dev/null || true
+          cp artifacts/kodama-cli-*/*.zip release/ 2>/dev/null || true
+
+          # Desktop installers
+          find artifacts/kodama-desktop-* -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' \) -exec cp {} release/ \; 2>/dev/null || true
+
+          ls -la release/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: "Kodama v${{ env.VERSION }}"
+          generate_release_notes: true
+          files: release/*

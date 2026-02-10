@@ -1,0 +1,4 @@
+name: kodama-pi5
+device: rpi5
+layers:
+  - ../layer/kodama.yaml

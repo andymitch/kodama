@@ -1,0 +1,135 @@
+name: Camera Alpha Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'apps/kodama-camera/**'
+      - 'docker/Dockerfile.cross'
+      - '.github/workflows/camera-alpha.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: Build cross-compiler image
+        run: docker build -t kodama-cross -f docker/Dockerfile.cross .
+
+      - name: Cross-compile camera binary
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/app" \
+            -w /app \
+            kodama-cross \
+            bash -c '
+              # Ensure aarch64 target is present for the active toolchain
+              rustup target add aarch64-unknown-linux-gnu
+
+              # Pin crypto deps for iroh compatibility
+              cargo update -p sha2 --precise 0.11.0-rc.4 || \
+                cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
+              cargo update -p digest --precise 0.11.0-rc.9 || \
+                cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
+
+              cargo build --target aarch64-unknown-linux-gnu --release -p kodama-camera
+            '
+
+      - name: Build .deb package
+        run: |
+          VERSION="0.1.0-alpha.${SHORT_SHA}"
+          PKG="kodama-camera_${VERSION}_arm64"
+          mkdir -p "${PKG}/DEBIAN"
+          mkdir -p "${PKG}/usr/local/bin"
+          mkdir -p "${PKG}/lib/systemd/system"
+          mkdir -p "${PKG}/etc/kodama"
+          mkdir -p "${PKG}/etc/NetworkManager/conf.d"
+          mkdir -p "${PKG}/etc/NetworkManager/dispatcher.d"
+
+          # Binary
+          cp target/aarch64-unknown-linux-gnu/release/kodama-camera "${PKG}/usr/local/bin/"
+          chmod 755 "${PKG}/usr/local/bin/kodama-camera"
+
+          # Systemd services
+          cp pi/systemd/kodama-camera.service "${PKG}/lib/systemd/system/"
+          cp pi/systemd/kodama-gps.service "${PKG}/lib/systemd/system/"
+
+          # GPS
+          cp pi/kodama-enable-gps.sh "${PKG}/usr/local/bin/"
+          chmod 755 "${PKG}/usr/local/bin/kodama-enable-gps.sh"
+          cp pi/gpsd.conf "${PKG}/etc/kodama/gpsd.conf"
+
+          # NetworkManager
+          cp pi/networkmanager/no-connectivity-check.conf "${PKG}/etc/NetworkManager/conf.d/"
+          cp pi/networkmanager/99-keep-cellular-route "${PKG}/etc/NetworkManager/dispatcher.d/"
+          chmod 755 "${PKG}/etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
+
+          # Env template
+          cp pi/image/files/kodama-env.example "${PKG}/etc/kodama/env.example"
+
+          # Control file
+          cat > "${PKG}/DEBIAN/control" << EOF
+          Package: kodama-camera
+          Version: ${VERSION}
+          Section: misc
+          Priority: optional
+          Architecture: arm64
+          Depends: gpsd, modemmanager, network-manager, alsa-utils
+          Maintainer: Andy Mitchell <andy@kodama.dev>
+          Description: Kodama camera - privacy-focused P2P security camera
+           Captures video, audio, and telemetry from a Raspberry Pi camera
+           and streams over Iroh QUIC to a Kodama server.
+          EOF
+
+          # Post-install script
+          cat > "${PKG}/DEBIAN/postinst" << 'EOF'
+          #!/bin/bash
+          set -e
+          mkdir -p /var/lib/kodama
+          chown yurei:yurei /var/lib/kodama
+          mkdir -p /etc/kodama
+          if [ ! -f /etc/kodama/env ]; then
+              cp /etc/kodama/env.example /etc/kodama/env
+          fi
+          # Install gpsd config (don't conflict with gpsd package)
+          cp /etc/kodama/gpsd.conf /etc/default/gpsd 2>/dev/null || true
+          systemctl daemon-reload
+          EOF
+          chmod 755 "${PKG}/DEBIAN/postinst"
+
+          dpkg-deb --build "${PKG}"
+          echo "DEB_FILE=${PKG}.deb" >> $GITHUB_ENV
+
+      - name: Move alpha tag
+        run: |
+          git tag -f alpha
+          git push -f origin alpha
+
+      - name: Create/update alpha release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: alpha
+          name: "Camera Alpha (${{ env.SHORT_SHA }})"
+          prerelease: true
+          body: |
+            Rolling alpha build from `main` at ${{ github.sha }}.
+
+            Install on Pi:
+            ```
+            sudo dpkg -i kodama-camera_*.deb
+            # Edit /etc/kodama/env with your KODAMA_SERVER_KEY
+            sudo systemctl enable --now kodama-camera
+            ```
+          files: ${{ env.DEB_FILE }}
