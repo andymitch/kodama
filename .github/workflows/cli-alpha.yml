@@ -1,12 +1,6 @@
 name: CLI Alpha Release
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'crates/**'
-      - 'apps/kodama-cli/**'
-      - '.github/workflows/cli-alpha.yml'
   workflow_dispatch:
 
 env:
