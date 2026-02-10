@@ -1,7 +1,11 @@
 # Kodama
 
 [![Rust](https://github.com/andymitch/kodama/actions/workflows/rust.yml/badge.svg)](https://github.com/andymitch/kodama/actions/workflows/rust.yml)
+[![Firmware](https://github.com/andymitch/kodama/actions/workflows/camera-alpha.yml/badge.svg)](https://github.com/andymitch/kodama/actions/workflows/camera-alpha.yml)
+[![Release](https://img.shields.io/github/v/release/andymitch/kodama?include_prereleases&label=firmware)](https://github.com/andymitch/kodama/releases/tag/alpha)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/platform-linux%2Faarch64-green.svg)](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)
 
 Privacy-focused P2P security camera system built on [Iroh](https://iroh.computer). Stream video from Raspberry Pi cameras to servers and clients over end-to-end encrypted QUIC connections, with no mandatory cloud dependency.
 
