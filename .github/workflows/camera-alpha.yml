@@ -62,6 +62,11 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/kodama-camera "${PKG}/usr/local/bin/"
           chmod 755 "${PKG}/usr/local/bin/kodama-camera"
 
+          # Also stage raw binary for direct OTA download
+          cp target/aarch64-unknown-linux-gnu/release/kodama-camera kodama-camera-aarch64
+          chmod 755 kodama-camera-aarch64
+          sha256sum kodama-camera-aarch64 > kodama-camera-aarch64.sha256
+
           # Systemd services
           cp pi/systemd/kodama-camera.service "${PKG}/lib/systemd/system/"
           cp pi/systemd/kodama-gps.service "${PKG}/lib/systemd/system/"
@@ -132,4 +137,7 @@ jobs:
             # Edit /etc/kodama/env with your KODAMA_SERVER_KEY
             sudo systemctl enable --now kodama-camera
             ```
-          files: ${{ env.DEB_FILE }}
+          files: |
+            ${{ env.DEB_FILE }}
+            kodama-camera-aarch64
+            kodama-camera-aarch64.sha256

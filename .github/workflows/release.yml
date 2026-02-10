@@ -414,6 +414,12 @@ jobs:
           # Camera .deb
           cp artifacts/kodama-camera-deb/*.deb release/ 2>/dev/null || true
 
+          # Camera raw binary (for OTA updates)
+          if [ -f artifacts/kodama-camera-aarch64/kodama-camera ]; then
+            cp artifacts/kodama-camera-aarch64/kodama-camera release/kodama-camera-aarch64
+            (cd release && sha256sum kodama-camera-aarch64 > kodama-camera-aarch64.sha256)
+          fi
+
           # Pi image
           cp artifacts/kodama-pi-image-*/*.img.xz release/ 2>/dev/null || true
 

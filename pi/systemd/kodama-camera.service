@@ -2,13 +2,17 @@
 Description=Kodama Camera
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
 User=yurei
 Group=yurei
 SupplementaryGroups=video dialout audio
-ExecStart=/usr/local/bin/kodama-camera
+WorkingDirectory=/home/yurei/kodama
+ExecStartPre=-/bin/sh -c 'test -f /home/yurei/kodama/kodama-camera || (test -f /home/yurei/kodama/kodama-camera.prev && mv /home/yurei/kodama/kodama-camera.prev /home/yurei/kodama/kodama-camera)'
+ExecStart=/home/yurei/kodama/kodama-camera
 Restart=always
 RestartSec=5
 EnvironmentFile=-/etc/kodama/env

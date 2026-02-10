@@ -18,6 +18,8 @@
 //! kodama-camera --no-audio --no-telemetry
 //! ```
 
+mod update;
+
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use iroh::PublicKey;
@@ -154,6 +156,12 @@ enum CaptureMessage {
     Telemetry(Bytes),
 }
 
+fn version_string() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let sha = env!("KODAMA_GIT_SHA");
+    format!("{version}+{sha}")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -169,7 +177,7 @@ async fn main() -> Result<()> {
 
     let abr_enabled = config.enable_abr && !config.test_source;
 
-    info!("Kodama Camera starting");
+    info!("Kodama Camera {} starting", version_string());
     info!("  Video: {}x{} @ {}fps", config.video.width, config.video.height, config.video.fps);
     info!("  Audio: {}", if config.enable_audio { "enabled" } else { "disabled" });
     info!("  Telemetry: {}", if config.enable_telemetry { "enabled" } else { "disabled" });
@@ -720,11 +728,34 @@ async fn execute_record(params: RecordParams) -> CommandResult {
     CommandResult::Error("Recording not yet implemented (Phase 2)".into())
 }
 
-/// Handle UpdateFirmware command — download and verify binary
+/// Handle UpdateFirmware command — download, verify, replace, restart
 async fn execute_update_firmware(params: UpdateFirmwareParams) -> CommandResult {
-    info!("Firmware update requested from url={}, sha256={}", params.url, params.sha256);
-    // Phase 2: download, verify hash, self-replace
-    CommandResult::Error("Firmware update not yet implemented (Phase 2)".into())
+    info!("Firmware update requested: url={}, sha256={}", params.url, params.sha256);
+
+    // Skip if already running the target version
+    if let Some(ref target_version) = params.version {
+        let current = version_string();
+        if current == *target_version {
+            info!("Already running version {}, skipping update", current);
+            return CommandResult::Ok;
+        }
+    }
+
+    let update_id = format!("{:08x}", rand::random::<u32>());
+    let id_clone = update_id.clone();
+
+    match update::UpdateState::new(params.url, params.sha256) {
+        Ok(state) => {
+            tokio::spawn(async move {
+                if let Err(e) = state.execute().await {
+                    // execute() calls process::exit on success, so we only get here on failure
+                    warn!(update_id = %id_clone, "OTA update failed: {:#}", e);
+                }
+            });
+            CommandResult::UpdateStarted { update_id }
+        }
+        Err(e) => CommandResult::Error(format!("Failed to prepare update: {}", e)),
+    }
 }
 
 /// Handle Network command — WiFi management
@@ -861,6 +892,7 @@ async fn gather_status() -> Result<CameraStatus> {
         video_bitrate: None,
         disk_used: None,
         disk_total: None,
+        version: Some(version_string()),
     })
 }
 

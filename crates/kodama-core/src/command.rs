@@ -93,6 +93,8 @@ pub enum CommandResult {
     Status(CameraStatus),
     /// List of recordings
     RecordingsList(Vec<RecordingInfo>),
+    /// Firmware update started (download in progress)
+    UpdateStarted { update_id: String },
 }
 
 /// Camera status information
@@ -122,6 +124,9 @@ pub struct CameraStatus {
     pub disk_used: Option<u64>,
     /// Disk total in bytes
     pub disk_total: Option<u64>,
+    /// Firmware version string (e.g. "0.1.0+abc1234")
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// Parameters for camera configuration
@@ -155,6 +160,9 @@ pub struct UpdateFirmwareParams {
     pub url: String,
     /// Expected SHA256 hash for verification
     pub sha256: String,
+    /// Target version string (optional, used to skip if already running)
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// Parameters for network management
@@ -272,6 +280,7 @@ mod tests {
                 video_bitrate: Some(5_000_000),
                 disk_used: None,
                 disk_total: None,
+                version: Some("0.1.0+abc1234".into()),
             }),
         });
 
