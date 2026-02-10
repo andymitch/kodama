@@ -1,11 +1,11 @@
-name: Camera Alpha Release
+name: Firmware Alpha Release
 
 on:
   push:
     branches: [main]
     paths:
       - 'crates/**'
-      - 'apps/kodama-camera/**'
+      - 'apps/kodama-firmware/**'
       - 'docker/Dockerfile.cross'
       - '.github/workflows/camera-alpha.yml'
   workflow_dispatch:
@@ -44,13 +44,13 @@ jobs:
               cargo update -p digest --precise 0.11.0-rc.9 || \
                 cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
 
-              cargo build --target aarch64-unknown-linux-gnu --release -p kodama-camera
+              cargo build --target aarch64-unknown-linux-gnu --release -p kodama-firmware
             '
 
       - name: Build .deb package
         run: |
           VERSION="0.1.0-alpha.${SHORT_SHA}"
-          PKG="kodama-camera_${VERSION}_arm64"
+          PKG="kodama-firmware_${VERSION}_arm64"
           mkdir -p "${PKG}/DEBIAN"
           mkdir -p "${PKG}/usr/local/bin"
           mkdir -p "${PKG}/lib/systemd/system"
@@ -59,16 +59,16 @@ jobs:
           mkdir -p "${PKG}/etc/NetworkManager/dispatcher.d"
 
           # Binary
-          cp target/aarch64-unknown-linux-gnu/release/kodama-camera "${PKG}/usr/local/bin/"
-          chmod 755 "${PKG}/usr/local/bin/kodama-camera"
+          cp target/aarch64-unknown-linux-gnu/release/kodama-firmware "${PKG}/usr/local/bin/"
+          chmod 755 "${PKG}/usr/local/bin/kodama-firmware"
 
           # Also stage raw binary for direct OTA download
-          cp target/aarch64-unknown-linux-gnu/release/kodama-camera kodama-camera-aarch64
-          chmod 755 kodama-camera-aarch64
-          sha256sum kodama-camera-aarch64 > kodama-camera-aarch64.sha256
+          cp target/aarch64-unknown-linux-gnu/release/kodama-firmware kodama-firmware-aarch64
+          chmod 755 kodama-firmware-aarch64
+          sha256sum kodama-firmware-aarch64 > kodama-firmware-aarch64.sha256
 
           # Systemd services
-          cp pi/systemd/kodama-camera.service "${PKG}/lib/systemd/system/"
+          cp pi/systemd/kodama-firmware.service "${PKG}/lib/systemd/system/"
           cp pi/systemd/kodama-gps.service "${PKG}/lib/systemd/system/"
 
           # GPS
@@ -86,7 +86,7 @@ jobs:
 
           # Control file
           cat > "${PKG}/DEBIAN/control" << EOF
-          Package: kodama-camera
+          Package: kodama-firmware
           Version: ${VERSION}
           Section: misc
           Priority: optional
@@ -133,11 +133,11 @@ jobs:
 
             Install on Pi:
             ```
-            sudo dpkg -i kodama-camera_*.deb
+            sudo dpkg -i kodama-firmware_*.deb
             # Edit /etc/kodama/env with your KODAMA_SERVER_KEY
-            sudo systemctl enable --now kodama-camera
+            sudo systemctl enable --now kodama-firmware
             ```
           files: |
             ${{ env.DEB_FILE }}
-            kodama-camera-aarch64
-            kodama-camera-aarch64.sha256
+            kodama-firmware-aarch64
+            kodama-firmware-aarch64.sha256

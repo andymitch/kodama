@@ -1,0 +1,28 @@
+[package]
+name = "kodama-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Kodama headless server with web UI"
+
+[[bin]]
+name = "kodama-server"
+path = "src/main.rs"
+
+[features]
+default = []
+tui = ["ratatui", "crossterm"]
+
+[dependencies]
+kodama = { workspace = true, features = ["web"] }
+iroh = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Optional TUI
+ratatui = { workspace = true, optional = true }
+crossterm = { workspace = true, optional = true }

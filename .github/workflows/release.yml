@@ -54,14 +54,14 @@ jobs:
               cargo update -p digest --precise 0.11.0-rc.9 || \
                 cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
 
-              cargo build --target aarch64-unknown-linux-gnu --release -p kodama-camera
+              cargo build --target aarch64-unknown-linux-gnu --release -p kodama-firmware
             '
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kodama-camera-aarch64
-          path: target/aarch64-unknown-linux-gnu/release/kodama-camera
+          name: kodama-firmware-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/kodama-firmware
 
   build-deb:
     needs: build-camera-binary
@@ -73,7 +73,7 @@ jobs:
       - name: Download binary
         uses: actions/download-artifact@v4
         with:
-          name: kodama-camera-aarch64
+          name: kodama-firmware-aarch64
           path: bin/
 
       - name: Get version from tag
@@ -89,7 +89,7 @@ jobs:
 
       - name: Build .deb package
         run: |
-          PKG="kodama-camera_${VERSION}_arm64"
+          PKG="kodama-firmware_${VERSION}_arm64"
           mkdir -p "${PKG}/DEBIAN"
           mkdir -p "${PKG}/usr/local/bin"
           mkdir -p "${PKG}/lib/systemd/system"
@@ -98,11 +98,11 @@ jobs:
           mkdir -p "${PKG}/etc/NetworkManager/dispatcher.d"
 
           # Binary
-          cp bin/kodama-camera "${PKG}/usr/local/bin/"
-          chmod 755 "${PKG}/usr/local/bin/kodama-camera"
+          cp bin/kodama-firmware "${PKG}/usr/local/bin/"
+          chmod 755 "${PKG}/usr/local/bin/kodama-firmware"
 
           # Systemd services
-          cp pi/systemd/kodama-camera.service "${PKG}/lib/systemd/system/"
+          cp pi/systemd/kodama-firmware.service "${PKG}/lib/systemd/system/"
           cp pi/systemd/kodama-gps.service "${PKG}/lib/systemd/system/"
 
           # GPS
@@ -120,7 +120,7 @@ jobs:
 
           # Control file
           cat > "${PKG}/DEBIAN/control" << EOF
-          Package: kodama-camera
+          Package: kodama-firmware
           Version: ${VERSION}
           Section: misc
           Priority: optional
@@ -154,7 +154,7 @@ jobs:
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kodama-camera-deb
+          name: kodama-firmware-deb
           path: ${{ env.DEB_FILE }}
 
   build-pi-image:
@@ -167,7 +167,7 @@ jobs:
       - name: Download .deb
         uses: actions/download-artifact@v4
         with:
-          name: kodama-camera-deb
+          name: kodama-firmware-deb
           path: deb/
 
       - name: Clone rpi-image-gen
@@ -239,27 +239,27 @@ jobs:
           cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p kodama-cli
+        run: cargo build --release --target ${{ matrix.target }} -p kodama-server
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../kodama-cli-${{ matrix.target }}.tar.gz kodama-cli
+          tar czf ../../../kodama-server-${{ matrix.target }}.tar.gz kodama-server
         shell: bash
 
       - name: Package (windows)
         if: matrix.archive == 'zip'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../kodama-cli-${{ matrix.target }}.zip kodama-cli.exe
+          7z a ../../../kodama-server-${{ matrix.target }}.zip kodama-server.exe
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kodama-cli-${{ matrix.target }}
-          path: kodama-cli-${{ matrix.target }}.${{ matrix.archive }}
+          name: kodama-server-${{ matrix.target }}
+          path: kodama-server-${{ matrix.target }}.${{ matrix.archive }}
 
   build-desktop:
     if: inputs.build_desktop
@@ -295,7 +295,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: apps/kodama-desktop/src-tauri -> target
+          workspaces: apps/kodama-app/src-tauri -> target
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -309,7 +309,7 @@ jobs:
           cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
 
       - name: Install frontend dependencies
-        run: cd apps/kodama-desktop && bun install
+        run: cd apps/kodama-app && bun install
 
       - name: Import macOS certificate
         if: startsWith(matrix.platform, 'macos') && env.APPLE_SIGN_AVAILABLE
@@ -351,7 +351,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          projectPath: apps/kodama-desktop
+          projectPath: apps/kodama-app
           args: ${{ matrix.args }}
 
       - name: Build Tauri app
@@ -360,24 +360,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: apps/kodama-desktop
+          projectPath: apps/kodama-app
           args: ${{ matrix.args }}
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kodama-desktop-${{ matrix.platform }}-${{ strategy.job-index }}
+          name: kodama-app-${{ matrix.platform }}-${{ strategy.job-index }}
           path: |
-            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.dmg
-            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.AppImage
-            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.deb
-            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.msi
-            apps/kodama-desktop/src-tauri/target/release/bundle/**/*.exe
-            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.dmg
-            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.AppImage
-            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.deb
-            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.msi
-            apps/kodama-desktop/src-tauri/target/*/release/bundle/**/*.exe
+            apps/kodama-app/src-tauri/target/release/bundle/**/*.dmg
+            apps/kodama-app/src-tauri/target/release/bundle/**/*.AppImage
+            apps/kodama-app/src-tauri/target/release/bundle/**/*.deb
+            apps/kodama-app/src-tauri/target/release/bundle/**/*.msi
+            apps/kodama-app/src-tauri/target/release/bundle/**/*.exe
+            apps/kodama-app/src-tauri/target/*/release/bundle/**/*.dmg
+            apps/kodama-app/src-tauri/target/*/release/bundle/**/*.AppImage
+            apps/kodama-app/src-tauri/target/*/release/bundle/**/*.deb
+            apps/kodama-app/src-tauri/target/*/release/bundle/**/*.msi
+            apps/kodama-app/src-tauri/target/*/release/bundle/**/*.exe
 
   release:
     needs: [build-deb, build-pi-image, build-cli, build-desktop]
@@ -412,23 +412,23 @@ jobs:
           mkdir -p release/
 
           # Camera .deb
-          cp artifacts/kodama-camera-deb/*.deb release/ 2>/dev/null || true
+          cp artifacts/kodama-firmware-deb/*.deb release/ 2>/dev/null || true
 
           # Camera raw binary (for OTA updates)
-          if [ -f artifacts/kodama-camera-aarch64/kodama-camera ]; then
-            cp artifacts/kodama-camera-aarch64/kodama-camera release/kodama-camera-aarch64
-            (cd release && sha256sum kodama-camera-aarch64 > kodama-camera-aarch64.sha256)
+          if [ -f artifacts/kodama-firmware-aarch64/kodama-firmware ]; then
+            cp artifacts/kodama-firmware-aarch64/kodama-firmware release/kodama-firmware-aarch64
+            (cd release && sha256sum kodama-firmware-aarch64 > kodama-firmware-aarch64.sha256)
           fi
 
           # Pi image
           cp artifacts/kodama-pi-image-*/*.img.xz release/ 2>/dev/null || true
 
           # CLI archives
-          cp artifacts/kodama-cli-*/*.tar.gz release/ 2>/dev/null || true
-          cp artifacts/kodama-cli-*/*.zip release/ 2>/dev/null || true
+          cp artifacts/kodama-server-*/*.tar.gz release/ 2>/dev/null || true
+          cp artifacts/kodama-server-*/*.zip release/ 2>/dev/null || true
 
           # Desktop installers
-          find artifacts/kodama-desktop-* -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' \) -exec cp {} release/ \; 2>/dev/null || true
+          find artifacts/kodama-app-* -type f \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' \) -exec cp {} release/ \; 2>/dev/null || true
 
           ls -la release/
 

@@ -1,4 +1,4 @@
-name: CLI Alpha Release
+name: Server Alpha Release
 
 on:
   workflow_dispatch:
@@ -14,12 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Delete existing cli-alpha release
+      - name: Delete existing server-alpha release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete cli-alpha --yes 2>/dev/null || true
-          git push origin :refs/tags/cli-alpha 2>/dev/null || true
+          gh release delete server-alpha --yes 2>/dev/null || true
+          git push origin :refs/tags/server-alpha 2>/dev/null || true
 
   build:
     needs: clean-release
@@ -58,20 +58,20 @@ jobs:
           cargo update -p digest --precise 0.11.0-rc.9 || cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || true
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p kodama-cli
+        run: cargo build --release --target ${{ matrix.target }} -p kodama-server
 
       - name: Package (unix)
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../kodama-cli-${{ matrix.target }}.tar.gz kodama-cli
+          tar czf ../../../kodama-server-${{ matrix.target }}.tar.gz kodama-server
         shell: bash
 
       - name: Package (windows)
         if: matrix.archive == 'zip'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../kodama-cli-${{ matrix.target }}.zip kodama-cli.exe
+          7z a ../../../kodama-server-${{ matrix.target }}.zip kodama-server.exe
         shell: bash
 
       - name: Set short SHA
@@ -81,15 +81,15 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: cli-alpha
-          name: "CLI Alpha (${{ env.SHORT_SHA }})"
+          tag_name: server-alpha
+          name: "Server Alpha (${{ env.SHORT_SHA }})"
           prerelease: true
           body: |
-            Rolling alpha build of `kodama-cli` from `main` at ${{ github.sha }}.
+            Rolling alpha build of `kodama-server` from `main` at ${{ github.sha }}.
 
             **Downloads:**
-            - macOS (Apple Silicon): `kodama-cli-aarch64-apple-darwin.tar.gz`
-            - macOS (Intel): `kodama-cli-x86_64-apple-darwin.tar.gz`
-            - Linux (x86_64): `kodama-cli-x86_64-unknown-linux-gnu.tar.gz`
-            - Windows (x86_64): `kodama-cli-x86_64-pc-windows-msvc.zip`
-          files: kodama-cli-${{ matrix.target }}.${{ matrix.archive }}
+            - macOS (Apple Silicon): `kodama-server-aarch64-apple-darwin.tar.gz`
+            - macOS (Intel): `kodama-server-x86_64-apple-darwin.tar.gz`
+            - Linux (x86_64): `kodama-server-x86_64-unknown-linux-gnu.tar.gz`
+            - Windows (x86_64): `kodama-server-x86_64-pc-windows-msvc.zip`
+          files: kodama-server-${{ matrix.target }}.${{ matrix.archive }}

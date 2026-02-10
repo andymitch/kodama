@@ -22,8 +22,8 @@ files:
     dest: /etc/motd
 
   # Systemd services
-  - source: ../../systemd/kodama-camera.service
-    dest: /lib/systemd/system/kodama-camera.service
+  - source: ../../systemd/kodama-firmware.service
+    dest: /lib/systemd/system/kodama-firmware.service
 
   - source: ../../systemd/kodama-gps.service
     dest: /lib/systemd/system/kodama-gps.service
@@ -52,7 +52,7 @@ firmware_config:
 services:
   enable:
     - ssh
-    - kodama-camera
+    - kodama-firmware
     - kodama-gps
 
 users:

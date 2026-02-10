@@ -1,0 +1,22 @@
+[Unit]
+Description=Kodama Camera
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=yurei
+Group=yurei
+SupplementaryGroups=video dialout audio
+WorkingDirectory=/home/yurei/kodama
+ExecStartPre=-/bin/sh -c 'test -f /home/yurei/kodama/kodama-firmware || (test -f /home/yurei/kodama/kodama-firmware.prev && mv /home/yurei/kodama/kodama-firmware.prev /home/yurei/kodama/kodama-firmware)'
+ExecStart=/home/yurei/kodama/kodama-firmware
+Restart=always
+RestartSec=5
+EnvironmentFile=-/etc/kodama/env
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

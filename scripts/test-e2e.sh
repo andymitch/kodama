@@ -28,7 +28,7 @@ cleanup() {
         kill "$CAMERA_PID" 2>/dev/null || true
     fi
     # Remove temp files
-    rm -f /tmp/kodama-cli.log /tmp/kodama-camera.log
+    rm -f /tmp/kodama-server.log /tmp/kodama-firmware.log
     rm -f ./server.key ./camera.key  # Clean up keys
 }
 
@@ -36,29 +36,29 @@ trap cleanup EXIT
 
 # Build binaries with test-source feature for camera
 echo "Building binaries..."
-cargo build --release --bin kodama-cli
-cargo build --release --bin kodama-camera --features test-source
+cargo build --release --bin kodama-server
+cargo build --release --bin kodama-firmware --features test-source
 echo "Build complete."
 echo ""
 
 # Start server
 echo "Starting server..."
-./target/release/kodama-cli > /tmp/kodama-cli.log 2>&1 &
+./target/release/kodama-server > /tmp/kodama-server.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 
 # Check server is running
 if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "ERROR: Server failed to start"
-    cat /tmp/kodama-cli.log
+    cat /tmp/kodama-server.log
     exit 1
 fi
 
 # Extract server's public key from logs
-SERVER_KEY=$(grep "Server PublicKey:" /tmp/kodama-cli.log | head -1 | awk '{print $NF}')
+SERVER_KEY=$(grep "Server PublicKey:" /tmp/kodama-server.log | head -1 | awk '{print $NF}')
 if [ -z "$SERVER_KEY" ]; then
     echo "ERROR: Could not find server PublicKey in logs"
-    cat /tmp/kodama-cli.log
+    cat /tmp/kodama-server.log
     exit 1
 fi
 
@@ -67,18 +67,18 @@ echo ""
 
 # Start camera with test source
 echo "Starting camera (test source)..."
-KODAMA_SERVER_KEY="$SERVER_KEY" KODAMA_KEY_PATH="./camera.key" ./target/release/kodama-camera --test-source > /tmp/kodama-camera.log 2>&1 &
+KODAMA_SERVER_KEY="$SERVER_KEY" KODAMA_KEY_PATH="./camera.key" ./target/release/kodama-firmware --test-source > /tmp/kodama-firmware.log 2>&1 &
 CAMERA_PID=$!
 sleep 2
 
 # Check camera is running
 if ! kill -0 "$CAMERA_PID" 2>/dev/null; then
     echo "ERROR: Camera failed to start"
-    cat /tmp/kodama-camera.log
+    cat /tmp/kodama-firmware.log
     exit 1
 fi
 
-CAMERA_KEY=$(grep "Camera PublicKey:" /tmp/kodama-camera.log | head -1 | awk '{print $NF}')
+CAMERA_KEY=$(grep "Camera PublicKey:" /tmp/kodama-firmware.log | head -1 | awk '{print $NF}')
 echo "Camera started with PublicKey: $CAMERA_KEY"
 echo ""
 
@@ -88,8 +88,8 @@ echo "Server PublicKey: $SERVER_KEY"
 echo "Camera PublicKey: $CAMERA_KEY"
 echo ""
 echo "Logs:"
-echo "  Server: /tmp/kodama-cli.log"
-echo "  Camera: /tmp/kodama-camera.log"
+echo "  Server: /tmp/kodama-server.log"
+echo "  Camera: /tmp/kodama-firmware.log"
 echo ""
 echo "Running for 20 seconds to collect stats..."
 echo ""
@@ -102,22 +102,22 @@ echo "=== Results ==="
 echo ""
 
 echo "--- Server Stats ---"
-grep -E "(Stats:|frames|cameras|clients)" /tmp/kodama-cli.log | tail -5 || echo "(no stats yet)"
+grep -E "(Stats:|frames|cameras|clients)" /tmp/kodama-server.log | tail -5 || echo "(no stats yet)"
 echo ""
 
 echo "--- Camera Stats ---"
-grep -E "(Stats:|frames|keyframes|Mbps)" /tmp/kodama-camera.log | tail -5 || echo "(no stats yet)"
+grep -E "(Stats:|frames|keyframes|Mbps)" /tmp/kodama-firmware.log | tail -5 || echo "(no stats yet)"
 echo ""
 
 # Check for errors
-if grep -q "error" /tmp/kodama-cli.log; then
+if grep -q "error" /tmp/kodama-server.log; then
     echo "WARNING: Errors found in server log"
-    grep "error" /tmp/kodama-cli.log | head -5
+    grep "error" /tmp/kodama-server.log | head -5
 fi
 
-if grep -q "error" /tmp/kodama-camera.log; then
+if grep -q "error" /tmp/kodama-firmware.log; then
     echo "WARNING: Errors found in camera log"
-    grep "error" /tmp/kodama-camera.log | head -5
+    grep "error" /tmp/kodama-firmware.log | head -5
 fi
 
 echo ""
@@ -127,8 +127,8 @@ echo ""
 # Success criteria: camera sent frames and server received them
 echo "Checking success criteria..."
 
-CAMERA_FRAMES=$(grep "Stats:" /tmp/kodama-camera.log | tail -1 | grep -oE 'video=[0-9]+' | grep -oE '[0-9]+' || echo "0")
-SERVER_FRAMES=$(grep -E "frames_received|Rx:" /tmp/kodama-cli.log | tail -1 | grep -oE '[0-9]+' | head -1 || echo "0")
+CAMERA_FRAMES=$(grep "Stats:" /tmp/kodama-firmware.log | tail -1 | grep -oE 'video=[0-9]+' | grep -oE '[0-9]+' || echo "0")
+SERVER_FRAMES=$(grep -E "frames_received|Rx:" /tmp/kodama-server.log | tail -1 | grep -oE '[0-9]+' | head -1 || echo "0")
 
 echo "  Camera frames sent: $CAMERA_FRAMES"
 echo "  Server frames received: $SERVER_FRAMES"

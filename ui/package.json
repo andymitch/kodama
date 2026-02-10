@@ -1,34 +1,30 @@
 {
-  "name": "@kodama/ui",
-  "version": "0.1.0",
+  "name": "kodama-ui",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
-  "svelte": "./src/lib/index.ts",
-  "exports": {
-    ".": {
-      "types": "./src/lib/index.ts",
-      "svelte": "./src/lib/index.ts"
-    },
-    "./components/*": {
-      "types": "./src/lib/components/*",
-      "svelte": "./src/lib/components/*"
-    }
-  },
   "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
     "bits-ui": "^1",
     "clsx": "^2",
+    "lucide-svelte": "^0.469",
     "tailwind-merge": "^2",
     "tailwind-variants": "^0.3"
   },
-  "peerDependencies": {
-    "svelte": "^5"
-  },
   "devDependencies": {
+    "@sveltejs/adapter-static": "^3",
+    "@sveltejs/kit": "^2",
+    "@sveltejs/vite-plugin-svelte": "^4",
+    "@tailwindcss/vite": "^4",
     "svelte": "^5",
     "svelte-check": "^4",
-    "typescript": "^5"
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^6"
   }
 }

@@ -58,11 +58,11 @@ stop_camera() {
 }
 
 build_and_deploy() {
-    local target_bin="${PROJECT_ROOT}/target/aarch64-unknown-linux-gnu/release/kodama-camera"
+    local target_bin="${PROJECT_ROOT}/target/aarch64-unknown-linux-gnu/release/kodama-firmware"
     local deploy_dir="/home/${PI_USER}/kodama"
 
     echo "Cross-compiling for aarch64..."
-    cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera 2>&1 | tail -3
+    cargo build --release --target aarch64-unknown-linux-gnu -p kodama-firmware 2>&1 | tail -3
 
     if [ ! -f "${target_bin}" ]; then
         echo "ERROR: Build failed - binary not found"
@@ -71,8 +71,8 @@ build_and_deploy() {
 
     pi_ssh "mkdir -p ${deploy_dir}"
     echo "Deploying binary..."
-    pi_scp "${target_bin}" "${deploy_dir}/kodama-camera"
-    echo "Deployed to ${deploy_dir}/kodama-camera"
+    pi_scp "${target_bin}" "${deploy_dir}/kodama-firmware"
+    echo "Deployed to ${deploy_dir}/kodama-firmware"
 }
 
 # --- Commands ---
@@ -86,7 +86,7 @@ cmd_deploy() {
     local deploy_dir="/home/${PI_USER}/kodama"
     echo ""
     echo "Done. Start with:"
-    echo "  ssh ${PI_USER}@${PI_HOST} 'cd ${deploy_dir} && KODAMA_SERVER_KEY=<key> KODAMA_KEY_PATH=${deploy_dir}/camera.key ./kodama-camera'"
+    echo "  ssh ${PI_USER}@${PI_HOST} 'cd ${deploy_dir} && KODAMA_SERVER_KEY=<key> KODAMA_KEY_PATH=${deploy_dir}/camera.key ./kodama-firmware'"
 }
 
 cmd_setup() {
@@ -178,7 +178,7 @@ cmd_setup() {
     echo "=== Setup complete ==="
     echo ""
     echo "Start camera:"
-    echo "  ssh ${PI_USER}@${PI_HOST} 'cd ${deploy_dir} && KODAMA_SERVER_KEY=<key> KODAMA_KEY_PATH=${deploy_dir}/camera.key ./kodama-camera'"
+    echo "  ssh ${PI_USER}@${PI_HOST} 'cd ${deploy_dir} && KODAMA_SERVER_KEY=<key> KODAMA_KEY_PATH=${deploy_dir}/camera.key ./kodama-firmware'"
     echo ""
     echo "Quick deploy after code changes:"
     echo "  ./scripts/pi.sh deploy"

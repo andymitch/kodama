@@ -1,0 +1,40 @@
+[package]
+name = "kodama"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Privacy-focused P2P security camera system"
+
+[features]
+default = []
+transport = []
+capture = []
+storage = ["transport"]
+server = ["transport", "storage"]
+web = ["server", "dep:axum", "dep:tower-http", "dep:futures-util"]
+test-source = ["capture"]
+
+[dependencies]
+# Core (always)
+bytes = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+iroh = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true }
+
+# Used by capture, storage
+serde_json = { workspace = true }
+libc = { workspace = true }
+async-trait = { workspace = true }
+
+# Web (axum + WebSocket)
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -17,39 +17,36 @@ This pins crypto dependencies (`sha2`, `digest`) to specific versions needed for
 ### Build
 ```bash
 cargo build                        # All workspace crates
-cargo build -p kodama-cli          # TUI server
-cargo build -p kodama-relay        # Standalone relay
-cargo build -p kodama-camera       # Camera
-cargo build -p kodama-camera --features test-source  # With synthetic test source
+cargo build -p kodama-server       # Headless server + web UI
+cargo build -p kodama-firmware     # Camera/relay firmware
+cargo build -p kodama-firmware --features test-source  # With synthetic test source
+cd ui && bun install && bun run build  # Build SvelteKit frontend
 ```
 
 ### Test
 ```bash
-cargo test                         # All unit tests
+cargo test --workspace --exclude kodama-app  # All unit + E2E tests
 cargo test <name_substring>        # Single test by name
-cargo test -p kodama-server --test e2e  # E2E regression suite (real QUIC, no hardware)
-./scripts/test-e2e.sh             # Full pipeline test (builds release, needs display)
+cargo test -p kodama --test e2e    # E2E regression suite (real QUIC, no hardware)
+./scripts/test-e2e.sh             # Full pipeline test (builds release, runs server + firmware)
 ```
 
 ### Run
 ```bash
-# Server TUI (prints public key, interactive dashboard)
-cargo run -p kodama-cli
+# Server (web UI on port 3000, prints public key)
+cargo run -p kodama-server
 
-# Standalone relay (lightweight frame forwarder)
-cargo run -p kodama-relay
-
-# Camera (requires server key)
-KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-camera
+# Camera firmware (requires server key)
+KODAMA_SERVER_KEY=<base32_key> cargo run -p kodama-firmware
 
 # Camera with test source (no hardware)
-KODAMA_SERVER_KEY=<key> cargo run -p kodama-camera --features test-source -- --test-source
+KODAMA_SERVER_KEY=<key> cargo run -p kodama-firmware --features test-source -- --mode camera --test-source
+
+# Relay firmware (lightweight frame forwarder)
+cargo run -p kodama-firmware -- --mode relay
 
 # Desktop app (Tauri)
-cd apps/kodama-desktop && bun run tauri dev
-
-# Mobile app (Tauri)
-cd apps/kodama-mobile && bun run tauri dev
+cd apps/kodama-app && bun install && bun run tauri dev
 ```
 
 ## Pi Deployment
@@ -83,14 +80,14 @@ System configs deployed to the Pi are in `pi/` (gpsd, NetworkManager, systemd).
 sshpass -p "password" ssh yurei@10.0.0.229
 
 # Cross-compile and deploy manually
-cargo build --release --target aarch64-unknown-linux-gnu -p kodama-camera
+cargo build --release --target aarch64-unknown-linux-gnu -p kodama-firmware
 sshpass -p "password" scp -o StrictHostKeyChecking=accept-new \
-  target/aarch64-unknown-linux-gnu/release/kodama-camera \
+  target/aarch64-unknown-linux-gnu/release/kodama-firmware \
   yurei@10.0.0.229:~/kodama/
 
-# Run on Pi (replace <server_key> with actual key from desktop app)
+# Run on Pi (replace <server_key> with actual key from server)
 sshpass -p "password" ssh yurei@10.0.0.229 \
-  "cd ~/kodama && KODAMA_SERVER_KEY=<server_key> KODAMA_KEY_PATH=/home/yurei/kodama/camera.key ./kodama-camera"
+  "cd ~/kodama && KODAMA_SERVER_KEY=<server_key> KODAMA_KEY_PATH=/home/yurei/kodama/camera.key ./kodama-firmware"
 ```
 
 ### Notes
@@ -101,39 +98,59 @@ sshpass -p "password" ssh yurei@10.0.0.229 \
 
 Kodama is a privacy-focused P2P security camera system using Iroh for transport.
 
-### Module Layout (Cargo workspace)
+### Workspace Layout
+```
+kodama/
+├── crates/kodama/                 # Single library crate (feature-gated)
+│                                  #   Core types, transport, capture, storage, server, web
+├── apps/
+│   ├── kodama-firmware/           #   Camera or relay (--mode camera|relay)
+│   ├── kodama-server/             #   Headless server + web UI (+ optional TUI)
+│   └── kodama-app/                #   Tauri desktop app (embeds server)
+│       └── src-tauri/
+├── ui/                            # Shared SvelteKit frontend (adapter-static)
+├── pi/                            # Pi system configs (gpsd, NetworkManager, systemd)
+└── scripts/
+    ├── setup.sh                   #   Pin crypto dependencies
+    ├── pi.sh                      #   Pi management (setup, deploy, wifi-off)
+    └── test-e2e.sh                #   Full pipeline test (server + firmware)
+```
 
-**Library crates** (`crates/`):
-- **kodama-core** - Frame type, Channel enum, SourceId, protocol constants (ALPN: "kodama/0")
-- **kodama-capture** - Video/audio/telemetry capture, H.264 keyframe detection
-- **kodama-transport** - Iroh endpoint wrapper (`transport/`) and frame serialization (`mux/`)
-- **kodama-server** - Router (broadcast channel), ClientManager, StorageManager
-- **kodama-storage** - StorageBackend trait with local filesystem and cloud (S3/R2) implementations
+### Feature Flags (kodama library)
+```
+default = []
+transport       — Iroh endpoint, frame mux/demux
+capture         — Video/audio/telemetry, ABR, H.264
+storage         — Local + cloud backends (implies transport)
+server          — Router, ClientManager, RateLimiter (implies transport + storage)
+web             — axum HTTP, WebSocket bridge, fMP4 muxer (implies server)
+test-source     — Synthetic video/audio (implies capture)
+```
 
-**Application crates** (`apps/`):
-- **kodama-cli** - TUI server (interactive dashboard, falls back to headless when stdout is not a TTY)
-- **kodama-relay** - Standalone relay (lightweight frame forwarder, no storage/routing)
-- **kodama-camera** - Camera capture binary
-- **kodama-desktop** - Tauri + SvelteKit desktop app (server + client modes)
-- **kodama-mobile** - Tauri + SvelteKit mobile app (server + client modes)
+Core types (Frame, Channel, SourceId, Identity, protocol constants) always compile.
 
 ### Data Flow
 ```
-Camera (capture → Frame) → Iroh QUIC → Server (Router → broadcast) → Clients
+Camera (capture → Frame) → Iroh QUIC → Server (Router → broadcast) → WS+MSE → Browser
                                               ↓
                                         StorageBackend
 ```
 
-### Frame Format (18-byte header + 4-byte length prefix)
-`4-byte length prefix on wire | [source_id: 8][channel: 1][flags: 1][timestamp: 8][payload: var]`
+### Frame Format (22-byte header + 4-byte length prefix)
+```
+Wire: [4-byte length prefix][22-byte header][payload]
 
-Channels: Video(0), Audio(1), Telemetry(2). Flags include KEYFRAME (0x01).
+Header: [source_id: 8][channel: 1][flags: 1][timestamp: 8][length: 4]
+```
+
+Channels: Video(0), Audio(1), Telemetry(2). Flags include KEYFRAME (0x01). Max payload: 2 MB.
 
 ### Key Abstractions
 - `Relay` - wraps Iroh endpoint, handles connections
 - `RelayConnection::open_frame_stream()` - persistent QUIC stream for frames
 - `Router` - broadcasts frames to clients via `tokio::sync::broadcast`
 - `transport::mux::frame::{read_frame, write_frame}` - all binary frame I/O goes through here
+- `web::start()` - axum server with static file serving + WebSocket for live streaming
 
 ### Peer Detection
 Cameras open a frame stream immediately (they're senders). Clients wait for the server to open a stream to them.
@@ -143,10 +160,15 @@ Cameras open a frame stream immediately (they're senders). Clients wait for the 
 Key variables (all prefixed `KODAMA_`):
 - `KODAMA_SERVER_KEY` - Server's base32 public key (required for camera)
 - `KODAMA_KEY_PATH` - Path to keypair file (default: ./camera.key or ./server.key)
-- `KODAMA_STORAGE_PATH` - Recording location
+- `KODAMA_STORAGE_PATH` - Recording location (enables recording)
+- `KODAMA_STORAGE_MAX_GB` - Maximum storage size in GB (default: 10)
+- `KODAMA_RETENTION_DAYS` - Recording retention period (default: 7)
 - `KODAMA_BUFFER_SIZE` - Broadcast buffer capacity (default: 512)
-- `KODAMA_UPSTREAM_KEY` - Upstream server key (relay only)
-- `KODAMA_STORAGE_URL_TTL` - Pre-signed URL expiry in minutes (default: 15, range: 1–1440)
+- `KODAMA_WEB_PORT` - Web server port (default: 3000)
+- `KODAMA_UI_PATH` - Path to SvelteKit build directory (default: embedded or ./ui/build)
+- `KODAMA_ABR` - Set to `0` to disable adaptive bitrate
+- `KODAMA_MODE` - Firmware mode: `camera` or `relay` (default: camera)
+- `KODAMA_UPSTREAM_KEY` - Upstream server key (relay mode only)
 - `KODAMA_TELEMETRY_INTERVAL` - Seconds between telemetry samples (default: 1)
 - `KODAMA_TELEMETRY_HEARTBEAT` - Seconds between full telemetry heartbeats (default: 30)
 - `KODAMA_TELEMETRY_GPS_THRESHOLD` - GPS position change threshold in degrees (default: 0.0001, ~11m)

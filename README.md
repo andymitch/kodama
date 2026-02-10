@@ -14,19 +14,18 @@ Privacy-focused P2P security camera system built on [Iroh](https://iroh.computer
 - **Per-connection Rate Limiting**: Lock-free atomic rate limiter with abuse detection (120fps video, 100fps audio, 10fps telemetry)
 - **Pluggable Storage**: Local filesystem or cloud (S3/R2) backends with retention policies and cleanup
 - **GPS & Telemetry**: CPU, memory, temperature, GPS position, and motion detection streamed alongside video
+- **Web UI**: SvelteKit frontend with WebSocket + MSE for live video in any browser
 
 ## Status
 
-The core streaming pipeline (camera → server → client) is **production-ready** and deployed on Raspberry Pi hardware with cellular failover. Desktop and mobile viewer UIs are under active development.
+The core streaming pipeline (camera → server → client/browser) is **production-ready** and deployed on Raspberry Pi hardware with cellular failover.
 
 | Component | Status |
 |---|---|
-| Camera binary (`kodama-camera`) | Production — streaming, ABR, reconnection, cellular failover |
-| Server library (`kodama-server`) | Production — routing, rate limiting, storage, command forwarding |
-| TUI server (`kodama-cli`) | Functional — headless + basic TUI dashboard ([#19](https://github.com/andymitch/kodama/issues/19)) |
-| Standalone relay (`kodama-relay`) | Functional — lightweight frame forwarder |
-| Desktop app (`kodama-desktop`) | In progress — MSE video backend done, UI under development ([#20](https://github.com/andymitch/kodama/issues/20)) |
-| Mobile app (`kodama-mobile`) | Scaffold — Tauri structure in place, needs implementation ([#21](https://github.com/andymitch/kodama/issues/21)) |
+| Firmware (`kodama-firmware`) | Production — camera streaming, ABR, reconnection, relay mode |
+| Server (`kodama-server`) | Production — routing, rate limiting, storage, web UI, WebSocket |
+| Desktop app (`kodama-app`) | In progress — Tauri + embedded server + web UI |
+| Library (`kodama`) | Production — single crate with feature-gated modules |
 
 ## Quick Start
 
@@ -39,53 +38,61 @@ cd kodama
 # Build everything
 cargo build
 
-# Run tests (77 unit + E2E tests)
-cargo test --workspace --exclude kodama-mobile
+# Run tests (150+ unit + E2E tests)
+cargo test --workspace --exclude kodama-app
 ```
 
 ### Running
 
 ```bash
-# 1. Start the server (prints public key)
-cargo run -p kodama-cli
+# 1. Start the server (web UI on port 3000, prints public key)
+cargo run -p kodama-server
 
 # 2. Start a camera with synthetic test source (no hardware needed)
-KODAMA_SERVER_KEY=<key> cargo run -p kodama-camera --features test-source -- --test-source
-```
+KODAMA_SERVER_KEY=<key> cargo run -p kodama-firmware --features test-source -- --mode camera --test-source
 
-The server auto-detects whether stdout is a TTY: interactive terminal gets a ratatui dashboard, redirected output falls back to plain logging.
+# 3. Open http://localhost:3000 in a browser to watch the live stream
+```
 
 ## Architecture
 
 ```
-Camera (capture) ──> Iroh QUIC ──> Server (Router ──> broadcast) ──> Clients
+Camera (capture) ──> Iroh QUIC ──> Server (Router ──> broadcast) ──> WS+MSE ──> Browser
                                            |
                                      StorageBackend
 ```
 
-Cameras open a persistent QUIC stream and push frames. The server detects cameras vs clients by behavior (cameras open a stream within 2s; clients wait). Frames are broadcast to all subscribed clients and optionally written to storage.
+Cameras open a persistent QUIC stream and push frames. The server detects cameras vs clients by behavior (cameras open a stream within 2s; clients wait). Frames are broadcast to all subscribed clients and optionally written to storage. The web module muxes H.264 into fMP4 and delivers it over WebSocket for MSE playback in browsers.
 
 ### Workspace Layout
 
 ```
 kodama/
-├── crates/                    # Library crates
-│   ├── kodama-core/           #   Frame format, Channel enum, SourceId, ALPN protocol
-│   ├── kodama-capture/        #   Video/audio/telemetry capture, H.264 parsing, ABR
-│   ├── kodama-transport/       #   Iroh endpoint wrapper, frame serialization (mux/)
-│   ├── kodama-server/         #   Router, rate limiting, ClientManager, StorageManager
-│   └── kodama-storage/        #   StorageBackend trait (local filesystem, S3/R2)
-├── apps/                      # Application binaries
-│   ├── kodama-cli/            #   TUI server (ratatui dashboard / headless)
-│   ├── kodama-relay/          #   Standalone relay (lightweight frame forwarder)
-│   ├── kodama-camera/         #   Camera capture (Raspberry Pi + test source)
-│   ├── kodama-desktop/        #   Tauri + SvelteKit desktop app
-│   └── kodama-mobile/         #   Tauri + SvelteKit mobile app
-├── pi/                        # Pi system configs (gpsd, NetworkManager, systemd)
+├── crates/kodama/                 # Single library crate (feature-gated)
+│                                  #   Core types, transport, capture, storage, server, web
+├── apps/
+│   ├── kodama-firmware/           #   Camera or relay (--mode camera|relay)
+│   ├── kodama-server/             #   Headless server + web UI (+ optional TUI)
+│   └── kodama-app/                #   Tauri desktop app (embeds server)
+│       └── src-tauri/
+├── ui/                            # Shared SvelteKit frontend (adapter-static)
+├── pi/                            # Pi system configs (gpsd, NetworkManager, systemd)
 └── scripts/
-    ├── setup.sh               #   Pin crypto dependencies
-    ├── pi.sh                  #   Pi management (setup, deploy, wifi-off)
-    └── test-e2e.sh            #   Full pipeline test (server + camera)
+    ├── setup.sh                   #   Pin crypto dependencies
+    ├── pi.sh                      #   Pi management (setup, deploy, wifi-off)
+    └── test-e2e.sh                #   Full pipeline test (server + firmware)
+```
+
+### Feature Flags (kodama library)
+
+```
+default = []
+transport       — Iroh endpoint, frame mux/demux
+capture         — Video/audio/telemetry, ABR, H.264
+storage         — Local + cloud backends (implies transport)
+server          — Router, ClientManager, RateLimiter (implies transport + storage)
+web             — axum HTTP, WebSocket bridge, fMP4 muxer (implies server)
+test-source     — Synthetic video/audio (implies capture)
 ```
 
 ### Frame Format
@@ -124,13 +131,13 @@ The deploy script cross-compiles for `aarch64-unknown-linux-gnu` and pushes the 
 ## Testing
 
 ```bash
-# All unit tests (73 tests across 5 crates)
-cargo test --workspace --exclude kodama-mobile
+# All unit tests
+cargo test --workspace --exclude kodama-app
 
 # E2E regression suite (real QUIC connections, no hardware)
-cargo test -p kodama-server --test e2e
+cargo test -p kodama --test e2e
 
-# Full pipeline test (builds release, runs server + camera for 20s)
+# Full pipeline test (builds release, runs server + firmware for 20s)
 ./scripts/test-e2e.sh
 ```
 
@@ -146,8 +153,10 @@ The E2E suite validates frame flow through the router, 2 MB frame size enforceme
 | `KODAMA_STORAGE_MAX_GB` | Maximum storage size in GB | `10` |
 | `KODAMA_RETENTION_DAYS` | Recording retention period | `7` |
 | `KODAMA_BUFFER_SIZE` | Broadcast channel capacity | `512` |
+| `KODAMA_WEB_PORT` | Web server port (server only) | `3000` |
 | `KODAMA_ABR` | Set to `0` to disable adaptive bitrate | enabled |
-| `KODAMA_UPSTREAM_KEY` | Upstream server key (relay only) | — |
+| `KODAMA_MODE` | Firmware mode: `camera` or `relay` | `camera` |
+| `KODAMA_UPSTREAM_KEY` | Upstream server key (relay mode only) | — |
 | `RUST_LOG` | Tracing filter (e.g., `kodama=debug`) | `kodama=info` |
 
 ## Development
@@ -155,8 +164,8 @@ The E2E suite validates frame flow through the router, 2 MB frame size enforceme
 ### Prerequisites
 
 - Rust stable (1.75+)
-- `bun` for frontend development (desktop/mobile apps)
-- FFmpeg (for desktop app video muxing)
+- `bun` for frontend development
+- FFmpeg (for video muxing — server and desktop app)
 - For Pi deployment: `aarch64-unknown-linux-gnu` cross-compilation toolchain
 
 ### Crypto Dependency Pinning
@@ -178,9 +187,6 @@ Iroh depends on pre-release `curve25519-dalek` and `ed25519-dalek` which require
 
 See [open issues](https://github.com/andymitch/kodama/issues) for the full list. Key priorities:
 
-- [#19](https://github.com/andymitch/kodama/issues/19) — Full TUI server dashboard (tabs, bandwidth graphs, peer management)
-- [#20](https://github.com/andymitch/kodama/issues/20) — Desktop app UI (live camera view, playback, alerts)
-- [#21](https://github.com/andymitch/kodama/issues/21) — Mobile app UI (connection, streaming, notifications)
 - [#6](https://github.com/andymitch/kodama/issues/6) — QR code camera registration
 - [#7](https://github.com/andymitch/kodama/issues/7) — Production Pi deployment with minimal setup
 - [#9](https://github.com/andymitch/kodama/issues/9) — Graceful shutdown with CancellationToken

@@ -1,16 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kodama-core",
-    "crates/kodama-transport",
-    "crates/kodama-capture",
-    "crates/kodama-storage",
-    "crates/kodama-server",
-    "apps/kodama-cli",
-    "apps/kodama-relay",
-    "apps/kodama-camera",
-    "apps/kodama-desktop/src-tauri",
-    "apps/kodama-mobile/src-tauri",
+    "crates/kodama",
+    "apps/kodama-firmware",
+    "apps/kodama-server",
+    "apps/kodama-app/src-tauri",
 ]
 
 [workspace.package]
@@ -46,6 +40,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 sha2 = "0.10"
 hex = "0.4"
 
+# Web
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+
 # Utilities
 futures-util = "0.3"
 rand = "0.9"
@@ -61,8 +59,4 @@ crossterm = "0.28"
 tempfile = "3"
 
 # Internal crates
-kodama-core = { path = "crates/kodama-core" }
-kodama-transport = { path = "crates/kodama-transport" }
-kodama-capture = { path = "crates/kodama-capture" }
-kodama-storage = { path = "crates/kodama-storage" }
-kodama-server = { path = "crates/kodama-server" }
+kodama = { path = "crates/kodama" }
