@@ -59,7 +59,9 @@ This file provides guidance to AI coding agents when working with code in this r
 - Useful environment overrides:
   - `KODAMA_KEY_PATH=/var/lib/kodama/camera.key` (where the camera keypair is stored)
   - `KODAMA_WIDTH`, `KODAMA_HEIGHT`, `KODAMA_FPS`
-  - `KODAMA_TELEMETRY_INTERVAL` (seconds between telemetry updates)
+  - `KODAMA_TELEMETRY_INTERVAL` (seconds between telemetry samples, default: 1)
+  - `KODAMA_TELEMETRY_HEARTBEAT` (seconds between full telemetry heartbeats, default: 30)
+  - `KODAMA_TELEMETRY_GPS_THRESHOLD` (GPS position change threshold in degrees, default: 0.0001)
 
 #### Desktop app
 - Run the Tauri desktop app (embeds server + client):

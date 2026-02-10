@@ -108,6 +108,21 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(1);
 
+        // Telemetry heartbeat interval from env or default (30 seconds)
+        let telemetry_heartbeat: u32 = std::env::var("KODAMA_TELEMETRY_HEARTBEAT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+
+        // GPS position threshold in degrees from env or default (0.0001 ≈ 11m)
+        let gps_threshold: f64 = std::env::var("KODAMA_TELEMETRY_GPS_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0001);
+
+        let mut telemetry_thresholds = kodama_capture::TelemetryThresholds::default();
+        telemetry_thresholds.lat_lon = gps_threshold;
+
         Ok(Self {
             server_key,
             key_path,
@@ -120,6 +135,8 @@ impl Config {
             audio: AudioCaptureConfig::default(),
             telemetry: TelemetryCaptureConfig {
                 interval_secs: telemetry_interval,
+                heartbeat_interval_secs: telemetry_heartbeat,
+                thresholds: telemetry_thresholds,
                 ..Default::default()
             },
             test_source,

@@ -147,6 +147,9 @@ Key variables (all prefixed `KODAMA_`):
 - `KODAMA_BUFFER_SIZE` - Broadcast buffer capacity (default: 512)
 - `KODAMA_UPSTREAM_KEY` - Upstream server key (relay only)
 - `KODAMA_STORAGE_URL_TTL` - Pre-signed URL expiry in minutes (default: 15, range: 1–1440)
+- `KODAMA_TELEMETRY_INTERVAL` - Seconds between telemetry samples (default: 1)
+- `KODAMA_TELEMETRY_HEARTBEAT` - Seconds between full telemetry heartbeats (default: 30)
+- `KODAMA_TELEMETRY_GPS_THRESHOLD` - GPS position change threshold in degrees (default: 0.0001, ~11m)
 - `RUST_LOG` - Tracing filter (e.g., `kodama=debug`)
 
 ## Key Patterns
