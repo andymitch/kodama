@@ -44,16 +44,15 @@ hex = "0.4"
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 
+# Audio
+cpal = "0.15"
+
 # Utilities
 futures-util = "0.3"
 rand = "0.9"
 async-trait = "0.1"
 libc = "0.2"
 tokio-util = "0.7"
-
-# TUI
-ratatui = "0.29"
-crossterm = "0.28"
 
 # Testing
 tempfile = "3"

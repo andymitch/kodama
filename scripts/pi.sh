@@ -104,7 +104,7 @@ cmd_setup() {
     # Video: rpicam-vid (Pi OS) or libcamera-apps (other ARM)
     # Audio: alsa-utils (arecord)
     # GPS:   gpsd + gpsd-clients
-    local packages="alsa-utils gpsd gpsd-clients"
+    local packages="libasound2 alsa-utils gpsd gpsd-clients"
 
     local has_video
     has_video=$(pi_ssh "command -v rpicam-vid >/dev/null 2>&1 && echo rpicam || (command -v libcamera-vid >/dev/null 2>&1 && echo libcamera) || echo none")
@@ -117,6 +117,9 @@ cmd_setup() {
 
     echo "  Packages: ${packages}"
     pi_ssh "sudo apt-get update -qq && sudo apt-get install -y -qq ${packages} 2>&1 | tail -5"
+
+    # Ensure user has audio group access for ALSA devices
+    pi_ssh "sudo usermod -aG audio ${PI_USER}"
 
     # --- Configure NetworkManager ---
     echo ""

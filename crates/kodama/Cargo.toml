@@ -9,7 +9,7 @@ description = "Privacy-focused P2P security camera system"
 [features]
 default = []
 transport = []
-capture = []
+capture = ["dep:cpal"]
 storage = ["transport"]
 server = ["transport", "storage"]
 web = ["server", "dep:axum", "dep:tower-http", "dep:futures-util"]
@@ -30,6 +30,9 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 libc = { workspace = true }
 async-trait = { workspace = true }
+
+# Audio capture
+cpal = { workspace = true, optional = true }
 
 # Web (axum + WebSocket)
 axum = { workspace = true, optional = true }
