@@ -163,7 +163,7 @@ async fn start_embedded_server(ui_path: Option<PathBuf>) -> anyhow::Result<()> {
     let bind = SocketAddr::from(([127, 0, 0, 1], web_port));
     let web_public_key = Some(public_key);
     tokio::spawn(async move {
-        if let Err(e) = kodama::web::start(web_handle, bind, ui_path, web_public_key).await {
+        if let Err(e) = kodama::web::start(web_handle, bind, ui_path, web_public_key, None, 0).await {
             tracing::error!("Web server error: {}", e);
         }
     });

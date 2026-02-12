@@ -2,17 +2,16 @@
   import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card/index.js';
   import { getTransport } from '$lib/transport-ws.js';
   import type { ServerStatus } from '$lib/types.js';
-  import { onMount } from 'svelte';
 
   let status: ServerStatus | null = $state(null);
 
-  onMount(async () => {
+  $effect(() => {
     const transport = getTransport();
-    try {
-      status = await transport.getStatus();
-    } catch {
+    transport.getStatus().then((s) => {
+      status = s;
+    }).catch(() => {
       // Server may not have /api/status yet
-    }
+    });
   });
 </script>
 

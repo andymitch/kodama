@@ -938,13 +938,31 @@ async fn network_monitor(_endpoint: iroh::Endpoint, change_tx: watch::Sender<u64
 /// Read the default route interface from /proc/net/route (Linux).
 /// Returns None on non-Linux or if no default route exists.
 fn get_default_interface() -> Option<String> {
-    let content = std::fs::read_to_string("/proc/net/route").ok()?;
-    for line in content.lines().skip(1) {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        // Destination 00000000 = default route
-        if fields.len() >= 2 && fields[1] == "00000000" {
-            return Some(fields[0].to_string());
+    // Linux: parse /proc/net/route
+    if let Ok(content) = std::fs::read_to_string("/proc/net/route") {
+        for line in content.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            // Destination 00000000 = default route
+            if fields.len() >= 2 && fields[1] == "00000000" {
+                return Some(fields[0].to_string());
+            }
+        }
+        return None;
+    }
+
+    // macOS: use `route get default`
+    if let Ok(output) = std::process::Command::new("route")
+        .args(["-n", "get", "default"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(iface) = trimmed.strip_prefix("interface:") {
+                return Some(iface.trim().to_string());
+            }
         }
     }
+
     None
 }

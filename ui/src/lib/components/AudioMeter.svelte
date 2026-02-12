@@ -1,12 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
   import { getTransport } from '$lib/transport-ws.js';
   import type { AudioLevelEvent } from '$lib/types.js';
 
   let { sourceId }: { sourceId: string } = $props();
 
   let level: number = $state(-60);
-  let unlisten: (() => void) | null = null;
 
   function dbToPercent(db: number): number {
     return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
@@ -23,13 +21,10 @@
     level = event.level_db;
   }
 
-  onMount(() => {
+  $effect(() => {
     const transport = getTransport();
-    unlisten = transport.on('audio-level', handleAudioLevel);
-  });
-
-  onDestroy(() => {
-    unlisten?.();
+    const unlisten = transport.on('audio-level', handleAudioLevel);
+    return () => unlisten();
   });
 </script>
 

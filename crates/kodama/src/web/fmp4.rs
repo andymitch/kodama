@@ -206,11 +206,9 @@ impl Fmp4Muxer {
                         self.init_sent = true;
                         tracing::info!("FFmpeg init segment: {} bytes", moov_end);
 
+                        // Keep leftover data as first media segment (contains moof+mdat)
                         if moov_end < self.pending_init.len() {
-                            tracing::info!(
-                                "Discarding {} bytes of initial media data",
-                                self.pending_init.len() - moov_end
-                            );
+                            result.media_segment = Some(self.pending_init[moov_end..].to_vec());
                         }
                         self.pending_init.clear();
                     }

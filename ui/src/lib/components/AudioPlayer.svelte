@@ -1,12 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
   import { getTransport } from '$lib/transport-ws.js';
   import type { AudioDataEvent } from '$lib/types.js';
 
   let { sourceId }: { sourceId: string } = $props();
 
   let audioContext: AudioContext | null = null;
-  let unlisten: (() => void) | null = null;
   let nextPlayTime = 0;
 
   function playAudioChunk(pcmData: ArrayBuffer, sampleRate: number, channels: number) {
@@ -42,16 +40,15 @@
     }
   }
 
-  onMount(() => {
+  $effect(() => {
     const transport = getTransport();
-    unlisten = transport.on('audio-data', handleAudioData);
-  });
-
-  onDestroy(() => {
-    unlisten?.();
-    if (audioContext) {
-      audioContext.close();
-    }
+    const unlisten = transport.on('audio-data', handleAudioData);
+    return () => {
+      unlisten();
+      if (audioContext) {
+        audioContext.close();
+      }
+    };
   });
 </script>
 

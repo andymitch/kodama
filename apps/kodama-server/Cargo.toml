@@ -10,10 +10,6 @@ description = "Kodama headless server with web UI"
 name = "kodama-server"
 path = "src/main.rs"
 
-[features]
-default = []
-tui = ["ratatui", "crossterm"]
-
 [dependencies]
 kodama = { workspace = true, features = ["web"] }
 iroh = { workspace = true }
@@ -22,7 +18,4 @@ tokio-util = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-# Optional TUI
-ratatui = { workspace = true, optional = true }
-crossterm = { workspace = true, optional = true }
+async-trait = { workspace = true }

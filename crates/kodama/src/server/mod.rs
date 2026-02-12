@@ -11,7 +11,7 @@ mod clients;
 mod rate_limit;
 mod storage;
 
-pub use router::{Router, RouterHandle, RouterStats, PeerRole};
+pub use router::{Router, RouterHandle, RouterStats, PeerRole, PeerDetail};
 pub use rate_limit::RateLimitConfig;
 pub use clients::{ClientManager, ClientPermissions, ClientInfo};
 pub use storage::{StorageManager, StorageConfig, StorageStats};

@@ -7,17 +7,118 @@
 //!   0x04 + src(8) + JSON  → telemetry
 //!   0x05 + src(8) + f32LE → audio level
 //!   0x06 + src(8) + sr(4LE) + ch(1) + pcm_data → audio data
+//!   0x07 + JSON           → peer event (connect/disconnect)
+//!   0x08 + JSON           → server stats
 
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use tokio::time::{interval, Duration};
 use tracing::{debug, warn};
 
 use crate::{Channel, Frame, SourceId};
 use crate::server::{PeerRole, RouterHandle};
 use super::fmp4::Fmp4Muxer;
+
+// ── Wire types for decoding camera's MessagePack telemetry ────────────
+
+/// Sparse telemetry as sent by camera (MessagePack, short field names)
+#[derive(Deserialize)]
+struct WireTelemetry {
+    #[serde(rename = "f", default)]
+    full: bool,
+    #[serde(rename = "cpu", default)]
+    cpu_usage: Option<f32>,
+    #[serde(rename = "tmp", default)]
+    cpu_temp: Option<f32>,
+    #[serde(rename = "mem", default)]
+    memory_usage: Option<f32>,
+    #[serde(rename = "dsk", default)]
+    disk_usage: Option<f32>,
+    #[serde(rename = "up", default)]
+    uptime_secs: Option<u64>,
+    #[serde(rename = "la", default)]
+    load_average: Option<[f32; 3]>,
+    #[serde(rename = "gps", default)]
+    gps: Option<WireGps>,
+    #[serde(rename = "mot", default)]
+    motion_level: Option<f32>,
+}
+
+#[derive(Deserialize)]
+struct WireGps {
+    #[serde(rename = "la")]
+    latitude: f64,
+    #[serde(rename = "lo")]
+    longitude: f64,
+    #[serde(rename = "al", default)]
+    altitude: Option<f64>,
+    #[serde(rename = "sp", default)]
+    speed: Option<f64>,
+    #[serde(rename = "hd", default)]
+    heading: Option<f64>,
+    #[serde(rename = "fm", default)]
+    fix_mode: u8,
+}
+
+/// Accumulated telemetry state, serialized as JSON for the browser
+#[derive(Default, Clone, Serialize)]
+struct TelemetryState {
+    cpu_usage: f32,
+    cpu_temp: Option<f32>,
+    memory_usage: f32,
+    disk_usage: f32,
+    uptime_secs: u64,
+    load_average: [f32; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gps: Option<GpsState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    motion_level: Option<f32>,
+    /// True after first full heartbeat (has all fields)
+    #[serde(skip)]
+    ready: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct GpsState {
+    latitude: f64,
+    longitude: f64,
+    altitude: Option<f64>,
+    speed: Option<f64>,
+    heading: Option<f64>,
+    fix_mode: u8,
+}
+
+impl TelemetryState {
+    fn merge(&mut self, wire: WireTelemetry) {
+        if let Some(v) = wire.cpu_usage { self.cpu_usage = v; }
+        if let Some(v) = wire.cpu_temp { self.cpu_temp = Some(v); }
+        if let Some(v) = wire.memory_usage { self.memory_usage = v; }
+        if let Some(v) = wire.disk_usage { self.disk_usage = v; }
+        if let Some(v) = wire.uptime_secs { self.uptime_secs = v; }
+        if let Some(v) = wire.load_average { self.load_average = v; }
+        if let Some(ref g) = wire.gps {
+            self.gps = Some(GpsState {
+                latitude: g.latitude,
+                longitude: g.longitude,
+                altitude: g.altitude,
+                speed: g.speed,
+                heading: g.heading,
+                fix_mode: g.fix_mode,
+            });
+        }
+        if let Some(v) = wire.motion_level { self.motion_level = Some(v); }
+        if wire.full { self.ready = true; }
+        // Also mark ready on first update (camera sends full heartbeat first)
+        if !self.ready && wire.cpu_usage.is_some() && wire.memory_usage.is_some() {
+            self.ready = true;
+        }
+    }
+}
 
 const MSG_CAMERA_LIST: u8 = 0x01;
 const MSG_VIDEO_INIT: u8 = 0x02;
@@ -25,9 +126,11 @@ const MSG_VIDEO_SEGMENT: u8 = 0x03;
 const MSG_TELEMETRY: u8 = 0x04;
 const MSG_AUDIO_LEVEL: u8 = 0x05;
 const MSG_AUDIO_DATA: u8 = 0x06;
+const MSG_PEER_EVENT: u8 = 0x07;
+const MSG_SERVER_STATS: u8 = 0x08;
 
 /// Handle a single WebSocket connection.
-pub async fn handle_ws(socket: WebSocket, handle: RouterHandle) {
+pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: Instant) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let mut rx = handle.subscribe();
 
@@ -39,7 +142,18 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle) {
 
     // Per-source fMP4 muxers (run on blocking thread pool)
     let mut muxers: HashMap<SourceId, Fmp4Muxer> = HashMap::new();
+    // Per-source accumulated telemetry state (sparse msgpack → full JSON)
+    let mut telemetry_states: HashMap<SourceId, TelemetryState> = HashMap::new();
     let mut known_cameras: HashSet<SourceId> = cameras.into_iter().collect();
+
+    // Track known peer keys for connect/disconnect detection
+    let mut known_peers: HashSet<iroh::PublicKey> = {
+        let peers = handle.peers().await;
+        peers.into_iter().map(|p| p.key).collect()
+    };
+
+    // Periodic stats push every 5 seconds
+    let mut stats_interval = interval(Duration::from_secs(5));
 
     loop {
         tokio::select! {
@@ -58,7 +172,7 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle) {
                             }
                         }
 
-                        let messages = process_frame(&frame, &mut muxers);
+                        let messages = process_frame(&frame, &mut muxers, &mut telemetry_states);
                         for msg in messages {
                             if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
                                 break;
@@ -86,13 +200,58 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle) {
                     _ => {} // Ignore text/binary from client for now
                 }
             }
+            // Periodic stats + peer change detection
+            _ = stats_interval.tick() => {
+                // Detect peer changes
+                let current_peers = handle.peers().await;
+                let current_keys: HashSet<iroh::PublicKey> = current_peers.iter().map(|p| p.key).collect();
+
+                // New peers (connected)
+                for p in &current_peers {
+                    if !known_peers.contains(&p.key) {
+                        if let Ok(msg) = encode_peer_event(p.key, p.role, "connected") {
+                            if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Removed peers (disconnected)
+                for key in &known_peers {
+                    if !current_keys.contains(key) {
+                        // We don't know the role of disconnected peers, default to "client"
+                        // since cameras are more detectable via camera list changes
+                        if let Ok(msg) = encode_peer_event(*key, PeerRole::Client, "disconnected") {
+                            if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                known_peers = current_keys;
+
+                // Push stats
+                let stats = handle.stats().await;
+                let uptime = server_start.elapsed().as_secs();
+                if let Ok(msg) = encode_server_stats(&stats, uptime) {
+                    if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
         }
     }
 
     debug!("WebSocket client disconnected");
 }
 
-fn process_frame(frame: &Frame, muxers: &mut HashMap<SourceId, Fmp4Muxer>) -> Vec<Vec<u8>> {
+fn process_frame(
+    frame: &Frame,
+    muxers: &mut HashMap<SourceId, Fmp4Muxer>,
+    telemetry_states: &mut HashMap<SourceId, TelemetryState>,
+) -> Vec<Vec<u8>> {
     let mut messages = Vec::new();
     let src = frame.source;
 
@@ -117,11 +276,25 @@ fn process_frame(frame: &Frame, muxers: &mut HashMap<SourceId, Fmp4Muxer>) -> Ve
             messages.push(encode_audio_level(src, level_db));
 
             // Forward PCM data
-            // Default: 16000 Hz mono (matching camera capture defaults)
-            messages.push(encode_audio_data(src, 16000, 1, &frame.payload));
+            // 48000 Hz mono matches AudioCaptureConfig::default() and TestAudioConfig::default()
+            messages.push(encode_audio_data(src, 48000, 1, &frame.payload));
         }
         Channel::Telemetry => {
-            messages.push(encode_telemetry(src, &frame.payload));
+            // Decode MessagePack sparse telemetry, accumulate state, send as JSON
+            match rmp_serde::from_slice::<WireTelemetry>(&frame.payload) {
+                Ok(wire) => {
+                    let state = telemetry_states.entry(src).or_default();
+                    state.merge(wire);
+                    if state.ready {
+                        if let Ok(json) = serde_json::to_vec(state) {
+                            messages.push(encode_telemetry(src, &json));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to decode telemetry msgpack: {}", e);
+                }
+            }
         }
         _ => {} // Unknown channels ignored
     }
@@ -133,8 +306,8 @@ async fn get_camera_ids(handle: &RouterHandle) -> Vec<SourceId> {
     let peers = handle.peers().await;
     peers
         .into_iter()
-        .filter(|(_, role)| *role == PeerRole::Camera)
-        .map(|(key, _)| SourceId::from_node_id_bytes(key.as_bytes()))
+        .filter(|p| p.role == PeerRole::Camera)
+        .map(|p| SourceId::from_node_id_bytes(p.key.as_bytes()))
         .collect()
 }
 
@@ -206,6 +379,41 @@ fn encode_audio_data(src: SourceId, sample_rate: u32, channels: u8, pcm_data: &[
     buf.push(channels);
     buf.extend_from_slice(pcm_data);
     buf
+}
+
+fn encode_peer_event(key: iroh::PublicKey, role: PeerRole, event_type: &str) -> Result<Vec<u8>, serde_json::Error> {
+    let mut obj = serde_json::json!({
+        "type": event_type,
+        "key": key.to_string(),
+        "role": match role {
+            PeerRole::Camera => "camera",
+            PeerRole::Client => "client",
+        },
+    });
+    if role == PeerRole::Camera {
+        let source = SourceId::from_node_id_bytes(key.as_bytes());
+        obj["source_id"] = serde_json::json!(format!("{}", source));
+    }
+    let json = serde_json::to_vec(&obj)?;
+    let mut buf = Vec::with_capacity(1 + json.len());
+    buf.push(MSG_PEER_EVENT);
+    buf.extend_from_slice(&json);
+    Ok(buf)
+}
+
+fn encode_server_stats(stats: &crate::server::RouterStats, uptime_secs: u64) -> Result<Vec<u8>, serde_json::Error> {
+    let obj = serde_json::json!({
+        "cameras": stats.cameras_connected,
+        "clients": stats.clients_connected,
+        "uptime_secs": uptime_secs,
+        "frames_received": stats.frames_received,
+        "frames_broadcast": stats.frames_broadcast,
+    });
+    let json = serde_json::to_vec(&obj)?;
+    let mut buf = Vec::with_capacity(1 + json.len());
+    buf.push(MSG_SERVER_STATS);
+    buf.extend_from_slice(&json);
+    Ok(buf)
 }
 
 /// Compute RMS audio level in dB from PCM s16le data

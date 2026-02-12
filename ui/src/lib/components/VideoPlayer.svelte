@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
   import { getTransport } from '$lib/transport-ws.js';
   import type { VideoInitEvent, VideoSegmentEvent } from '$lib/types.js';
 
@@ -17,8 +16,6 @@
   let mediaSegmentsAppended = 0;
   let appendErrorCount = 0;
   let droppedSegments = 0;
-  let unlistenInit: (() => void) | null = null;
-  let unlistenSegment: (() => void) | null = null;
   let liveEdgeTimer: ReturnType<typeof setInterval> | null = null;
 
   function tryPlay() {
@@ -203,22 +200,22 @@
     appendBuffer(event.data);
   }
 
-  onMount(() => {
+  $effect(() => {
     const transport = getTransport();
-    unlistenInit = transport.on('video-init', handleInit);
-    unlistenSegment = transport.on('video-segment', handleSegment);
-  });
+    const unlistenInit = transport.on('video-init', handleInit);
+    const unlistenSegment = transport.on('video-segment', handleSegment);
 
-  onDestroy(() => {
-    unlistenInit?.();
-    unlistenSegment?.();
-    if (liveEdgeTimer) { clearInterval(liveEdgeTimer); liveEdgeTimer = null; }
-    if (objectUrl) {
-      URL.revokeObjectURL(objectUrl);
-    }
-    if (mediaSource && mediaSource.readyState === 'open') {
-      try { mediaSource.endOfStream(); } catch {}
-    }
+    return () => {
+      unlistenInit();
+      unlistenSegment();
+      if (liveEdgeTimer) { clearInterval(liveEdgeTimer); liveEdgeTimer = null; }
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      if (mediaSource && mediaSource.readyState === 'open') {
+        try { mediaSource.endOfStream(); } catch {}
+      }
+    };
   });
 </script>
 

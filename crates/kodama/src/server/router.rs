@@ -5,6 +5,7 @@ use iroh::PublicKey;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
 use tokio::sync::{broadcast, oneshot, RwLock};
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
@@ -27,6 +28,14 @@ pub enum PeerRole {
     Camera,
     /// Client: receives frames from the server
     Client,
+}
+
+/// Detail about a connected peer (public API)
+#[derive(Debug, Clone)]
+pub struct PeerDetail {
+    pub key: PublicKey,
+    pub role: PeerRole,
+    pub connected_at: Instant,
 }
 
 /// Statistics about router state (returned as a snapshot from atomic counters)
@@ -72,6 +81,7 @@ impl AtomicRouterStats {
 struct PeerInfo {
     role: PeerRole,
     generation: u64,
+    connected_at: Instant,
 }
 
 /// Handle to the router for getting stats and managing peers
@@ -109,13 +119,17 @@ impl RouterHandle {
     }
 
     /// Get list of connected peers
-    pub async fn peers(&self) -> Vec<(PublicKey, PeerRole)> {
+    pub async fn peers(&self) -> Vec<PeerDetail> {
         self.inner
             .peers
             .read()
             .await
             .iter()
-            .map(|(k, v)| (*k, v.role))
+            .map(|(k, v)| PeerDetail {
+                key: *k,
+                role: v.role,
+                connected_at: v.connected_at,
+            })
             .collect()
     }
 
@@ -173,7 +187,7 @@ impl Router {
         let gen = self.inner.connection_generation.fetch_add(1, Ordering::Relaxed);
         let mut peers = self.inner.peers.write().await;
 
-        let old = peers.insert(key, PeerInfo { role, generation: gen });
+        let old = peers.insert(key, PeerInfo { role, generation: gen, connected_at: Instant::now() });
         if old.is_none() {
             match role {
                 PeerRole::Camera => { self.inner.stats.cameras_connected.fetch_add(1, Ordering::Relaxed); }
@@ -691,11 +705,11 @@ mod tests {
         let peers = handle.peers().await;
         assert_eq!(peers.len(), 2);
 
-        let cam = peers.iter().find(|(k, _)| *k == cam_key);
-        assert_eq!(cam.unwrap().1, PeerRole::Camera);
+        let cam = peers.iter().find(|p| p.key == cam_key);
+        assert_eq!(cam.unwrap().role, PeerRole::Camera);
 
-        let client = peers.iter().find(|(k, _)| *k == client_key);
-        assert_eq!(client.unwrap().1, PeerRole::Client);
+        let client = peers.iter().find(|p| p.key == client_key);
+        assert_eq!(client.unwrap().role, PeerRole::Client);
     }
 
     #[tokio::test]

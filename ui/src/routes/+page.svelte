@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
   import { Badge } from '$lib/components/ui/badge/index.js';
   import CameraCard from '$lib/components/CameraCard.svelte';
   import { getTransport } from '$lib/transport-ws.js';
@@ -8,7 +7,6 @@
   let cameras: CameraInfo[] = $state([]);
   let connected = $state(false);
   let error: string | null = $state(null);
-  let unlistenCamera: (() => void) | null = null;
 
   function handleCameraEvent(event: CameraEvent) {
     if (event.connected) {
@@ -24,16 +22,12 @@
     }
   }
 
-  onMount(async () => {
+  $effect(() => {
     const transport = getTransport();
+    const unlistenCamera = transport.on('camera-event', handleCameraEvent);
 
-    unlistenCamera = transport.on('camera-event', handleCameraEvent);
-
-    try {
-      await transport.connect();
+    transport.connect().then(async () => {
       connected = true;
-
-      // Load initial camera list
       try {
         const list = await transport.listCameras();
         if (list.length > 0) {
@@ -42,13 +36,13 @@
       } catch {
         // Server may not have /api/cameras yet
       }
-    } catch (e) {
+    }).catch((e) => {
       error = `Failed to connect to server: ${e}`;
-    }
-  });
+    });
 
-  onDestroy(() => {
-    unlistenCamera?.();
+    return () => {
+      unlistenCamera();
+    };
   });
 </script>
 

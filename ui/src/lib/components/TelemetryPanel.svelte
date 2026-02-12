@@ -1,12 +1,10 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
   import { getTransport } from '$lib/transport-ws.js';
   import type { TelemetryEvent } from '$lib/types.js';
 
   let { sourceId }: { sourceId: string } = $props();
 
   let telemetry: TelemetryEvent | null = $state(null);
-  let unlisten: (() => void) | null = null;
 
   function formatUptime(secs: number): string {
     const h = Math.floor(secs / 3600);
@@ -48,13 +46,10 @@
     telemetry = event;
   }
 
-  onMount(() => {
+  $effect(() => {
     const transport = getTransport();
-    unlisten = transport.on('telemetry', handleTelemetry);
-  });
-
-  onDestroy(() => {
-    unlisten?.();
+    const unlisten = transport.on('telemetry', handleTelemetry);
+    return () => unlisten();
   });
 </script>
 

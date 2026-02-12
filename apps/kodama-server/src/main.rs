@@ -14,23 +14,13 @@
 //!
 //! # With recording enabled
 //! KODAMA_STORAGE_PATH=/var/lib/kodama/recordings kodama-server
-//!
-//! # With TUI (requires --features tui)
-//! kodama-server --tui
 //! ```
-
-#[cfg(feature = "tui")]
-mod app;
-#[cfg(feature = "tui")]
-mod ui;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-#[cfg(feature = "tui")]
-use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -114,20 +104,22 @@ impl Config {
 
 struct StorageHandle {
     manager: StorageManager,
+    max_bytes: u64,
 }
 
 impl StorageHandle {
     fn new(path: PathBuf, max_gb: u64, retention_days: u64, keyframes_only: bool) -> Result<Self> {
+        let max_bytes = max_gb * 1024 * 1024 * 1024;
         let local_config = LocalStorageConfig {
             root_path: path,
-            max_size_bytes: max_gb * 1024 * 1024 * 1024,
+            max_size_bytes: max_bytes,
             segment_duration_us: 60 * 1_000_000,
         };
 
         let backend: Arc<dyn StorageBackend> = Arc::new(LocalStorage::new(local_config)?);
 
         let storage_config = StorageConfig {
-            max_size_bytes: max_gb * 1024 * 1024 * 1024,
+            max_size_bytes: max_bytes,
             retention_secs: retention_days * 24 * 60 * 60,
             keyframes_only,
             cleanup_interval_secs: 3600,
@@ -136,7 +128,7 @@ impl StorageHandle {
         let mut manager = StorageManager::new(storage_config, backend);
         manager.start_cleanup_task();
 
-        Ok(Self { manager })
+        Ok(Self { manager, max_bytes })
     }
 
     async fn store(&self, frame: &Frame) -> Result<bool> {
@@ -148,41 +140,16 @@ impl StorageHandle {
     }
 }
 
+#[async_trait::async_trait]
+impl kodama::web::StorageStatsProvider for StorageHandle {
+    async fn stats(&self) -> StorageStats {
+        self.manager.stats().await
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Check for --tui flag
-    let use_tui = std::env::args().any(|a| a == "--tui");
-
-    #[cfg(not(feature = "tui"))]
-    if use_tui {
-        eprintln!("TUI mode requires the 'tui' feature. Build with: cargo build --features tui");
-        std::process::exit(1);
-    }
-
-    // Initialize logging
-    #[cfg(feature = "tui")]
-    let log_tx = if use_tui && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-        let (tx, rx) = mpsc::unbounded_channel::<String>();
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
-        let channel_layer = ChannelLayer { tx: tx.clone() };
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("kodama=info".parse().unwrap()),
-            )
-            .with(channel_layer)
-            .init();
-        Some((tx, rx))
-    } else {
-        init_logging();
-        None
-    };
-
-    #[cfg(not(feature = "tui"))]
-    {
-        init_logging();
-    }
+    init_logging();
 
     let config = Config::from_env();
 
@@ -289,9 +256,12 @@ async fn main() -> Result<()> {
     let web_ui_path = config.ui_path.clone();
     let web_cancel = cancel.clone();
     let web_public_key = Some(public_key.clone());
+    let web_storage: Option<Arc<dyn kodama::web::StorageStatsProvider>> =
+        storage.clone().map(|s| s as Arc<dyn kodama::web::StorageStatsProvider>);
+    let web_storage_max = storage.as_ref().map(|s| s.max_bytes).unwrap_or(0);
     tracker.spawn(async move {
         tokio::select! {
-            result = kodama::web::start(web_handle, web_bind, web_ui_path, web_public_key) => {
+            result = kodama::web::start(web_handle, web_bind, web_ui_path, web_public_key, web_storage, web_storage_max) => {
                 if let Err(e) = result {
                     error!("Web server error: {}", e);
                 }
@@ -385,12 +355,6 @@ async fn main() -> Result<()> {
 
     tracker.close();
 
-    // Run in TUI or headless mode
-    #[cfg(feature = "tui")]
-    if let Some((_tx, rx)) = log_tx {
-        return run_tui(public_key, handle, storage, cancel, tracker, rx).await;
-    }
-
     run_headless(handle, storage, cancel, tracker).await
 }
 
@@ -440,131 +404,4 @@ async fn run_headless(
         warn!("Shutdown timed out after 5s");
     }
     Ok(())
-}
-
-/// TUI mode: interactive ratatui terminal
-#[cfg(feature = "tui")]
-async fn run_tui(
-    public_key: String,
-    handle: kodama::server::RouterHandle,
-    storage: Option<Arc<StorageHandle>>,
-    cancel: CancellationToken,
-    tracker: TaskTracker,
-    mut log_rx: mpsc::UnboundedReceiver<String>,
-) -> Result<()> {
-    use crossterm::{
-        event::{self, Event, KeyCode, KeyEventKind},
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    };
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
-
-    enable_raw_mode()?;
-    crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(std::io::stdout());
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = app::App::new(public_key, handle);
-    let tick_rate = Duration::from_millis(250);
-
-    let result: Result<()> = loop {
-        while let Ok(msg) = log_rx.try_recv() {
-            app.push_log(msg);
-        }
-
-        app.refresh().await;
-
-        if let Some(ref s) = storage {
-            app.storage_stats = Some(s.stats().await);
-        }
-
-        terminal.draw(|f| ui::draw(f, &app))?;
-
-        if event::poll(tick_rate)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q') {
-                    break Ok(());
-                }
-            }
-        }
-    };
-
-    disable_raw_mode()?;
-    crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
-
-    cancel.cancel();
-    if tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await.is_err() {
-        warn!("Shutdown timed out after 5s");
-    }
-
-    result
-}
-
-// --- Custom tracing layer for TUI mode ---
-
-#[cfg(feature = "tui")]
-struct ChannelLayer {
-    tx: mpsc::UnboundedSender<String>,
-}
-
-#[cfg(feature = "tui")]
-impl<S> tracing_subscriber::Layer<S> for ChannelLayer
-where
-    S: tracing::Subscriber,
-{
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
-        let meta = event.metadata();
-        let level = meta.level();
-        let target = meta.target();
-        let short_target = target.rsplit("::").next().unwrap_or(target);
-
-        let mut visitor = MessageVisitor::default();
-        event.record(&mut visitor);
-
-        let now = utc_timestamp();
-        let msg = format!("{} {:>5} {}: {}", now, level, short_target, visitor.message);
-        let _ = self.tx.send(msg);
-    }
-}
-
-#[cfg(feature = "tui")]
-#[derive(Default)]
-struct MessageVisitor {
-    message: String,
-}
-
-#[cfg(feature = "tui")]
-impl tracing::field::Visit for MessageVisitor {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            self.message = format!("{:?}", value);
-        } else if !self.message.is_empty() {
-            self.message.push_str(&format!(" {}={:?}", field.name(), value));
-        } else {
-            self.message = format!("{}={:?}", field.name(), value);
-        }
-    }
-
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" {
-            self.message = value.to_string();
-        } else if !self.message.is_empty() {
-            self.message.push_str(&format!(" {}={}", field.name(), value));
-        } else {
-            self.message = format!("{}={}", field.name(), value);
-        }
-    }
-}
-
-#[cfg(feature = "tui")]
-fn utc_timestamp() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs_of_day = now.as_secs() % 86400;
-    let h = secs_of_day / 3600;
-    let m = (secs_of_day % 3600) / 60;
-    let s = secs_of_day % 60;
-    format!("{:02}:{:02}:{:02}", h, m, s)
 }
