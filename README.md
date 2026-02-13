@@ -109,7 +109,7 @@ default = []
 transport       — Iroh endpoint, frame mux/demux
 capture         — Video/audio/telemetry, ABR, H.264
 storage         — Local + cloud backends (implies transport)
-server          — Router, ClientManager, RateLimiter (implies transport + storage)
+server          — Router, RateLimiter, StorageManager (implies transport + storage)
 web             — axum HTTP, WebSocket bridge, fMP4 muxer (implies server)
 test-source     — Synthetic video/audio (implies capture)
 ```

@@ -7,7 +7,7 @@
 //! - **`transport`**: Iroh endpoint wrapper, frame mux/demux, connection types
 //! - **`capture`**: Video/audio/telemetry capture, H.264 parsing, ABR
 //! - **`storage`**: Local filesystem and cloud (S3/R2) storage backends (implies `transport`)
-//! - **`server`**: Router, ClientManager, rate limiter (implies `transport` + `storage`)
+//! - **`server`**: Router, rate limiter, storage manager (implies `transport` + `storage`)
 //! - **`test-source`**: Synthetic video/audio without hardware (implies `capture`)
 
 // Core modules (always compiled)

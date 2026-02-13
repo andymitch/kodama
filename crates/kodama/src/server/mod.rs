@@ -7,13 +7,11 @@
 //! - Optionally stores frames to local or cloud storage
 
 mod router;
-mod clients;
 mod rate_limit;
 mod storage;
 
 pub use router::{Router, RouterHandle, RouterStats, PeerRole, PeerDetail};
 pub use rate_limit::RateLimitConfig;
-pub use clients::{ClientManager, ClientPermissions, ClientInfo};
 pub use storage::{StorageManager, StorageConfig, StorageStats};
 
 // Re-export transport and storage types for convenience

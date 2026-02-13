@@ -117,7 +117,7 @@ default = []
 transport       — Iroh endpoint, frame mux/demux
 capture         — Video/audio/telemetry, ABR, H.264
 storage         — Local + cloud backends (implies transport)
-server          — Router, ClientManager, RateLimiter (implies transport + storage)
+server          — Router, RateLimiter, StorageManager (implies transport + storage)
 web             — axum HTTP, WebSocket bridge, fMP4 muxer (implies server)
 test-source     — Synthetic video/audio (implies capture)
 ```
@@ -179,4 +179,4 @@ Key variables (all prefixed `KODAMA_`):
 
 ## Additional Documentation
 
-See `AGENTS.md` for detailed binary responsibilities, interaction patterns, and extension guidance.
+See [`docs/architecture.md`](docs/architecture.md) for detailed binary responsibilities, interaction patterns, and extension guidance. Keep this file up to date when making architectural changes (new modules, changed data flow, new binary modes, etc.).

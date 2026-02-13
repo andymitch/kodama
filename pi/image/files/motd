@@ -7,7 +7,7 @@
 
   Privacy-focused P2P security camera
 
-  Service:  systemctl status kodama-camera
-  Logs:     journalctl -u kodama-camera -f
+  Service:  systemctl status kodama-firmware
+  Logs:     journalctl -u kodama-firmware -f
   Config:   /etc/kodama/env
 

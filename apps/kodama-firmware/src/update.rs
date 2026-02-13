@@ -36,8 +36,8 @@ impl UpdateState {
             .context("Failed to determine current executable path")?;
 
         let dir = binary_path.parent().context("Binary has no parent directory")?;
-        let staging_path = dir.join("kodama-camera.new");
-        let backup_path = dir.join("kodama-camera.prev");
+        let staging_path = dir.join("kodama-firmware.new");
+        let backup_path = dir.join("kodama-firmware.prev");
 
         Ok(Self {
             url,
