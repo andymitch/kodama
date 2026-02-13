@@ -4,7 +4,6 @@ members = [
     "crates/kodama",
     "apps/kodama-firmware",
     "apps/kodama-server",
-    "apps/kodama-app/src-tauri",
 ]
 
 [workspace.package]

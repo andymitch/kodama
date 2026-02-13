@@ -18,14 +18,3 @@ Thumbs.db
 # Logs
 *.log
 
-# JS/Tauri build artifacts
-**/node_modules/
-**/dist/
-**/src-tauri/gen/
-**/.svelte-kit/
-ui/build/
-
-# Package manager lockfiles (keep repo Rust-focused; ignore accidental JS locks)
-**/package-lock.json
-**/bun.lock
-**/bun.lockb

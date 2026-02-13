@@ -28,8 +28,7 @@ if [ ! -f "Cargo.lock" ]; then
 fi
 
 # Pin crypto dependencies for iroh compatibility
-# Note: Tauri brings in sha2/digest 0.10.x, while Iroh needs 0.11.0-rc.x
-# Both versions can coexist, we just need to pin the ones Iroh uses
+# Iroh needs sha2/digest 0.11.0-rc.x
 echo "Pinning crypto dependencies for iroh compatibility..."
 
 # Use version-qualified package specs to handle multiple versions
@@ -60,7 +59,7 @@ echo ""
 echo "Next steps:"
 echo "  cargo build                      # Build all crates"
 echo "  cargo test                       # Run tests"
-echo "  cargo run -p kodama-server          # Run server (TUI)"
+echo "  cargo run -p kodama-server          # Run server"
 echo ""
 echo "For development without camera hardware:"
 echo "  KODAMA_SERVER_KEY=<key> cargo run -p kodama-firmware --features test-source -- --test-source"

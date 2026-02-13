@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Pin crypto dependencies
+      run: |
+        cargo update -p sha2 --precise 0.11.0-rc.4 || \
+          cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || \
+          echo "sha2 pinning skipped"
+        cargo update -p digest --precise 0.11.0-rc.9 || \
+          cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || \
+          echo "digest pinning skipped"
+
+    - name: Build
+      run: cargo build --verbose --workspace
+
+    - name: Run tests
+      run: cargo test --verbose --workspace

@@ -1,4 +1,4 @@
-name: Firmware Alpha Release
+name: Firmware Release
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
       - 'crates/**'
       - 'apps/kodama-firmware/**'
       - 'docker/Dockerfile.cross'
-      - '.github/workflows/camera-alpha.yml'
+      - '.github/workflows/release-firmware.yml'
   workflow_dispatch:
 
 env:
@@ -35,10 +35,8 @@ jobs:
             -w /app \
             kodama-cross \
             bash -c '
-              # Ensure aarch64 target is present for the active toolchain
               rustup target add aarch64-unknown-linux-gnu
 
-              # Pin crypto deps for iroh compatibility
               cargo update -p sha2 --precise 0.11.0-rc.4 || \
                 cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
               cargo update -p digest --precise 0.11.0-rc.9 || \
@@ -126,7 +124,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: alpha
-          name: "Camera Alpha (${{ env.SHORT_SHA }})"
+          name: "Firmware Alpha (${{ env.SHORT_SHA }})"
           prerelease: true
           body: |
             Rolling alpha build from `main` at ${{ github.sha }}.

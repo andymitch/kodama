@@ -17,15 +17,14 @@ This pins crypto dependencies (`sha2`, `digest`) to specific versions needed for
 ### Build
 ```bash
 cargo build                        # All workspace crates
-cargo build -p kodama-server       # Headless server + web UI
+cargo build -p kodama-server       # Headless server + HTTP API
 cargo build -p kodama-firmware     # Camera/relay firmware
 cargo build -p kodama-firmware --features test-source  # With synthetic test source
-cd ui && bun install && bun run build  # Build SvelteKit frontend
 ```
 
 ### Test
 ```bash
-cargo test --workspace --exclude kodama-app  # All unit + E2E tests
+cargo test --workspace             # All unit + E2E tests
 cargo test <name_substring>        # Single test by name
 cargo test -p kodama --test e2e    # E2E regression suite (real QUIC, no hardware)
 ./scripts/test-e2e.sh             # Full pipeline test (builds release, runs server + firmware)
@@ -33,7 +32,7 @@ cargo test -p kodama --test e2e    # E2E regression suite (real QUIC, no hardwar
 
 ### Run
 ```bash
-# Server (web UI on port 3000, prints public key)
+# Server (HTTP API on port 3000, prints public key)
 cargo run -p kodama-server
 
 # Camera firmware (requires server key)
@@ -44,9 +43,6 @@ KODAMA_SERVER_KEY=<key> cargo run -p kodama-firmware --features test-source -- -
 
 # Relay firmware (lightweight frame forwarder)
 cargo run -p kodama-firmware -- --mode relay
-
-# Desktop app (Tauri)
-cd apps/kodama-app && bun install && bun run tauri dev
 ```
 
 ## Pi Deployment
@@ -98,6 +94,8 @@ sshpass -p "password" ssh yurei@10.0.0.229 \
 
 Kodama is a privacy-focused P2P security camera system using Iroh for transport.
 
+The desktop app and SvelteKit UI live in a separate repo: [kodama-app](https://github.com/andymitch/kodama-app).
+
 ### Workspace Layout
 ```
 kodama/
@@ -105,10 +103,7 @@ kodama/
 │                                  #   Core types, transport, capture, storage, server, web
 ├── apps/
 │   ├── kodama-firmware/           #   Camera or relay (--mode camera|relay)
-│   ├── kodama-server/             #   Headless server + web UI (+ optional TUI)
-│   └── kodama-app/                #   Tauri desktop app (embeds server)
-│       └── src-tauri/
-├── ui/                            # Shared SvelteKit frontend (adapter-static)
+│   └── kodama-server/             #   Headless server + HTTP API
 ├── pi/                            # Pi system configs (gpsd, NetworkManager, systemd)
 └── scripts/
     ├── setup.sh                   #   Pin crypto dependencies
@@ -165,7 +160,7 @@ Key variables (all prefixed `KODAMA_`):
 - `KODAMA_RETENTION_DAYS` - Recording retention period (default: 7)
 - `KODAMA_BUFFER_SIZE` - Broadcast buffer capacity (default: 512)
 - `KODAMA_WEB_PORT` - Web server port (default: 3000)
-- `KODAMA_UI_PATH` - Path to SvelteKit build directory (default: embedded or ./ui/build)
+- `KODAMA_UI_PATH` - Path to static UI build directory (default: auto-detect)
 - `KODAMA_ABR` - Set to `0` to disable adaptive bitrate
 - `KODAMA_MODE` - Firmware mode: `camera` or `relay` (default: camera)
 - `KODAMA_UPSTREAM_KEY` - Upstream server key (relay mode only)

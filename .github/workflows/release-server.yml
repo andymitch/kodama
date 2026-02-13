@@ -1,4 +1,4 @@
-name: Server Alpha Release
+name: Server Release
 
 on:
   workflow_dispatch:
