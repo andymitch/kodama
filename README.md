@@ -2,14 +2,14 @@
 
 [![CI](https://github.com/andymitch/kodama/actions/workflows/ci.yml/badge.svg)](https://github.com/andymitch/kodama/actions/workflows/ci.yml)
 [![Firmware](https://github.com/andymitch/kodama/actions/workflows/release-firmware.yml/badge.svg)](https://github.com/andymitch/kodama/actions/workflows/release-firmware.yml)
-[![Release](https://img.shields.io/github/v/release/andymitch/kodama?include_prereleases&label=firmware)](https://github.com/andymitch/kodama/releases/tag/alpha)
+[![Server](https://github.com/andymitch/kodama/actions/workflows/release-server.yml/badge.svg)](https://github.com/andymitch/kodama/actions/workflows/release-server.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/platform-linux%2Faarch64-green.svg)](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)
+[![Desktop App](https://img.shields.io/github/v/release/andymitch/kodama-app?include_prereleases&label=desktop%20app)](https://github.com/andymitch/kodama-app/releases/latest)
 
 Privacy-focused P2P security camera system built on [Iroh](https://iroh.computer). Stream video from Raspberry Pi cameras to servers and clients over end-to-end encrypted QUIC connections, with no mandatory cloud dependency.
 
-> **Looking for the desktop app or UI?** See [kodama-app](https://github.com/andymitch/kodama-app) (BSL 1.1).
+> **Download the desktop app:** [macOS](https://github.com/andymitch/kodama-app/releases/latest) | [Linux](https://github.com/andymitch/kodama-app/releases/latest) | [Windows](https://github.com/andymitch/kodama-app/releases/latest) — from [kodama-app](https://github.com/andymitch/kodama-app)
 
 ## Features
 
@@ -61,7 +61,7 @@ KODAMA_SERVER_KEY=<key> cargo run -p kodama-firmware --features test-source -- -
 
 ### Using with kodama-app UI
 
-The server ships with an HTTP API but no bundled UI. To get the polished SvelteKit UI:
+The server ships with an HTTP API but no bundled UI. To get the full Svelte UI:
 
 ```bash
 # Option 1: Use the desktop app (from kodama-app repo)
@@ -100,7 +100,7 @@ kodama/
 | Repo | License | Description |
 |---|---|---|
 | [kodama](https://github.com/andymitch/kodama) (this repo) | MIT / Apache-2.0 | Core library, server, firmware |
-| [kodama-app](https://github.com/andymitch/kodama-app) | BSL 1.1 | Desktop/mobile app + SvelteKit UI |
+| [kodama-app](https://github.com/andymitch/kodama-app) | BSL 1.1 | Desktop/mobile app + Svelte UI |
 
 ### Feature Flags (kodama library)
 
