@@ -52,6 +52,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Pin crypto dependencies
         run: |
           cargo update -p sha2 --precise 0.11.0-rc.4 || cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || true
