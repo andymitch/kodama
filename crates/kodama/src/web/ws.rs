@@ -11,6 +11,7 @@
 //!   0x08 + JSON           → server stats
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket};
@@ -22,7 +23,7 @@ use tracing::{debug, warn};
 
 use crate::{Channel, Frame, SourceId};
 use crate::server::{PeerRole, RouterHandle};
-use super::fmp4::Fmp4Muxer;
+use super::fmp4::{MuxedVideo, VideoMuxer};
 
 // ── Wire types for decoding camera's MessagePack telemetry ────────────
 
@@ -130,9 +131,18 @@ const MSG_PEER_EVENT: u8 = 0x07;
 const MSG_SERVER_STATS: u8 = 0x08;
 
 /// Handle a single WebSocket connection.
-pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: Instant) {
+///
+/// Video is received from the shared `VideoMuxer` (one FFmpeg per source),
+/// while telemetry and audio come directly from the router broadcast.
+pub async fn handle_ws(
+    socket: WebSocket,
+    handle: RouterHandle,
+    video_muxer: Arc<VideoMuxer>,
+    server_start: Instant,
+) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let mut rx = handle.subscribe();
+    let mut video_rx = video_muxer.subscribe();
 
     // Send initial camera list
     let cameras = get_camera_ids(&handle).await;
@@ -140,8 +150,17 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: In
         let _ = ws_tx.send(Message::Binary(msg.into())).await;
     }
 
-    // Per-source fMP4 muxers (run on blocking thread pool)
-    let mut muxers: HashMap<SourceId, Fmp4Muxer> = HashMap::new();
+    // Send cached video inits for all known sources
+    let mut video_init_sent: HashSet<SourceId> = HashSet::new();
+    let cached_inits = video_muxer.cached_inits().await;
+    for (src, init) in &cached_inits {
+        let msg = encode_video_init(*src, &init.codec, init.width, init.height, &init.data);
+        if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+            return;
+        }
+        video_init_sent.insert(*src);
+    }
+
     // Per-source accumulated telemetry state (sparse msgpack → full JSON)
     let mut telemetry_states: HashMap<SourceId, TelemetryState> = HashMap::new();
     let mut known_cameras: HashSet<SourceId> = cameras.into_iter().collect();
@@ -157,7 +176,7 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: In
 
     loop {
         tokio::select! {
-            // Forward frames from router to WebSocket client
+            // Non-video frames from router broadcast
             result = rx.recv() => {
                 match result {
                     Ok(frame) => {
@@ -172,7 +191,12 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: In
                             }
                         }
 
-                        let messages = process_frame(&frame, &mut muxers, &mut telemetry_states);
+                        // Skip video — handled by video_rx from shared muxer
+                        if matches!(frame.channel, Channel::Video) {
+                            continue;
+                        }
+
+                        let messages = process_frame(&frame, &mut telemetry_states);
                         for msg in messages {
                             if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
                                 break;
@@ -180,11 +204,44 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: In
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WebSocket client lagged, missed {} frames", n);
-                        // Reset muxers since we missed frames
-                        for muxer in muxers.values_mut() {
-                            muxer.reset();
+                        warn!("WebSocket client lagged on frame broadcast, missed {} frames", n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            // Muxed video from shared VideoMuxer
+            video = video_rx.recv() => {
+                match video {
+                    Ok(MuxedVideo::Init { source, init }) => {
+                        let msg = encode_video_init(source, &init.codec, init.width, init.height, &init.data);
+                        if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                            break;
                         }
+                        video_init_sent.insert(source);
+                    }
+                    Ok(MuxedVideo::Segment { source, data }) => {
+                        // Only send segments after init has been sent for this source
+                        if !video_init_sent.contains(&source) {
+                            // Lazy-fetch cached init
+                            if let Some(init) = video_muxer.cached_init(&source).await {
+                                let msg = encode_video_init(source, &init.codec, init.width, init.height, &init.data);
+                                if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                                    break;
+                                }
+                                video_init_sent.insert(source);
+                            } else {
+                                continue; // No init cached yet, skip segment
+                            }
+                        }
+                        let msg = encode_video_segment(source, &data);
+                        if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("WebSocket client lagged on video broadcast, missed {} frames", n);
+                        // Clear tracking so we re-send inits from cache on next segment
+                        video_init_sent.clear();
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -220,8 +277,6 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: In
                 // Removed peers (disconnected)
                 for key in &known_peers {
                     if !current_keys.contains(key) {
-                        // We don't know the role of disconnected peers, default to "client"
-                        // since cameras are more detectable via camera list changes
                         if let Ok(msg) = encode_peer_event(*key, PeerRole::Client, "disconnected") {
                             if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
                                 break;
@@ -247,29 +302,16 @@ pub async fn handle_ws(socket: WebSocket, handle: RouterHandle, server_start: In
     debug!("WebSocket client disconnected");
 }
 
+/// Process a non-video frame (audio or telemetry) into WebSocket messages.
+/// Video is handled separately by the shared VideoMuxer.
 fn process_frame(
     frame: &Frame,
-    muxers: &mut HashMap<SourceId, Fmp4Muxer>,
     telemetry_states: &mut HashMap<SourceId, TelemetryState>,
 ) -> Vec<Vec<u8>> {
     let mut messages = Vec::new();
     let src = frame.source;
 
     match frame.channel {
-        Channel::Video => {
-            let muxer = muxers.entry(src).or_insert_with(Fmp4Muxer::new);
-            let result = muxer.mux_frame(&frame.payload, frame.flags.is_keyframe(), frame.timestamp_us);
-
-            if let (Some(init), Some(codec), Some(w), Some(h)) =
-                (&result.init_segment, &result.codec, result.width, result.height)
-            {
-                messages.push(encode_video_init(src, codec, w, h, init));
-            }
-
-            if let Some(segment) = &result.media_segment {
-                messages.push(encode_video_segment(src, segment));
-            }
-        }
         Channel::Audio => {
             // Compute audio level from PCM data
             let level_db = compute_audio_rms(&frame.payload);
@@ -296,7 +338,7 @@ fn process_frame(
                 }
             }
         }
-        _ => {} // Unknown channels ignored
+        _ => {} // Video handled by VideoMuxer, unknown channels ignored
     }
 
     messages

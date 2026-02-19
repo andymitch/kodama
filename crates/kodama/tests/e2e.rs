@@ -104,13 +104,21 @@ use axum::response::{IntoResponse, Json};
 struct TestWebState {
     handle: kodama::server::RouterHandle,
     start_time: std::time::Instant,
+    video_muxer: Arc<kodama::web::fmp4::VideoMuxer>,
 }
 
 async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<TestWebState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| kodama::web::ws::handle_ws(socket, state.handle.clone(), state.start_time))
+    ws.on_upgrade(move |socket| {
+        kodama::web::ws::handle_ws(
+            socket,
+            state.handle.clone(),
+            Arc::clone(&state.video_muxer),
+            state.start_time,
+        )
+    })
 }
 
 async fn api_cameras(State(state): State<Arc<TestWebState>>) -> Json<serde_json::Value> {
@@ -170,9 +178,18 @@ async fn start_test_server(handle: kodama::server::RouterHandle) -> SocketAddr {
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
+        // Start shared video muxer
+        let video_muxer = Arc::new(kodama::web::fmp4::VideoMuxer::new(512));
+        let muxer_rx = handle.subscribe();
+        let muxer_ref = Arc::clone(&video_muxer);
+        tokio::spawn(async move {
+            muxer_ref.run(muxer_rx).await;
+        });
+
         let state = Arc::new(TestWebState {
             handle,
             start_time: std::time::Instant::now(),
+            video_muxer,
         });
 
         let app = axum::Router::new()

@@ -4,10 +4,14 @@
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use tokio::sync::{broadcast, RwLock};
+
+use crate::{Channel, Frame, SourceId};
 
 /// Result of muxing a frame
 pub struct MuxResult {
@@ -263,4 +267,116 @@ fn find_box_end(data: &[u8], box_type: &[u8; 4]) -> Option<usize> {
         pos += size;
     }
     None
+}
+
+// ── Shared video muxer ──────────────────────────────────────────────
+
+/// Cached fMP4 init segment (ftyp+moov) for a video source.
+#[derive(Clone)]
+pub struct CachedInit {
+    pub codec: String,
+    pub width: u32,
+    pub height: u32,
+    pub data: Bytes,
+}
+
+/// Muxed video output distributed to WebSocket clients.
+#[derive(Clone)]
+pub enum MuxedVideo {
+    /// Init segment for a source (ftyp+moov)
+    Init { source: SourceId, init: CachedInit },
+    /// Media segment for a source (moof+mdat)
+    Segment { source: SourceId, data: Bytes },
+}
+
+/// Shared video muxer: runs one FFmpeg process per source and distributes
+/// muxed fMP4 output to all WebSocket clients via a broadcast channel.
+///
+/// This replaces per-client FFmpeg muxers, fixing the bug where each
+/// WebSocket connection only received video for one source.
+pub struct VideoMuxer {
+    inits: RwLock<HashMap<SourceId, CachedInit>>,
+    video_tx: broadcast::Sender<MuxedVideo>,
+}
+
+impl VideoMuxer {
+    pub fn new(capacity: usize) -> Self {
+        let (video_tx, _) = broadcast::channel(capacity);
+        Self {
+            inits: RwLock::new(HashMap::new()),
+            video_tx,
+        }
+    }
+
+    /// Get the cached init segment for a specific source.
+    pub async fn cached_init(&self, source: &SourceId) -> Option<CachedInit> {
+        self.inits.read().await.get(source).cloned()
+    }
+
+    /// Get cached init segments for all known sources.
+    pub async fn cached_inits(&self) -> HashMap<SourceId, CachedInit> {
+        self.inits.read().await.clone()
+    }
+
+    /// Subscribe to muxed video output.
+    pub fn subscribe(&self) -> broadcast::Receiver<MuxedVideo> {
+        self.video_tx.subscribe()
+    }
+
+    /// Run the video muxing loop. Call once at startup.
+    ///
+    /// Reads video frames from the router broadcast, runs them through
+    /// per-source FFmpeg muxers, caches init segments, and broadcasts
+    /// muxed output to all subscribers.
+    pub async fn run(&self, mut rx: broadcast::Receiver<Frame>) {
+        let mut muxers: HashMap<SourceId, Fmp4Muxer> = HashMap::new();
+
+        loop {
+            match rx.recv().await {
+                Ok(frame) => {
+                    if !matches!(frame.channel, Channel::Video) {
+                        continue;
+                    }
+
+                    let src = frame.source;
+                    let muxer = muxers.entry(src).or_insert_with(Fmp4Muxer::new);
+                    let result = muxer.mux_frame(
+                        &frame.payload,
+                        frame.flags.is_keyframe(),
+                        frame.timestamp_us,
+                    );
+
+                    if let (Some(init_data), Some(codec), Some(w), Some(h)) =
+                        (result.init_segment, &result.codec, result.width, result.height)
+                    {
+                        let cached = CachedInit {
+                            codec: codec.clone(),
+                            width: w,
+                            height: h,
+                            data: Bytes::from(init_data),
+                        };
+                        self.inits.write().await.insert(src, cached.clone());
+                        let _ = self.video_tx.send(MuxedVideo::Init {
+                            source: src,
+                            init: cached,
+                        });
+                    }
+
+                    if let Some(segment) = result.media_segment {
+                        let _ = self.video_tx.send(MuxedVideo::Segment {
+                            source: src,
+                            data: Bytes::from(segment),
+                        });
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("Video muxer lagged, missed {} frames — resetting", n);
+                    for muxer in muxers.values_mut() {
+                        muxer.reset();
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }
 }

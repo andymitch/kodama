@@ -43,6 +43,7 @@ struct WebState {
     public_key: Option<String>,
     storage: Option<Arc<dyn StorageStatsProvider>>,
     storage_max_bytes: u64,
+    video_muxer: Arc<fmp4::VideoMuxer>,
 }
 
 /// Start the web server.
@@ -60,12 +61,21 @@ pub async fn start(
     storage: Option<Arc<dyn StorageStatsProvider>>,
     storage_max_bytes: u64,
 ) -> Result<()> {
+    // Create shared video muxer (one FFmpeg per source, shared across all WS clients)
+    let video_muxer = Arc::new(fmp4::VideoMuxer::new(512));
+    let muxer_rx = handle.subscribe();
+    let muxer_ref = Arc::clone(&video_muxer);
+    tokio::spawn(async move {
+        muxer_ref.run(muxer_rx).await;
+    });
+
     let state = Arc::new(WebState {
         handle,
         start_time: Instant::now(),
         public_key,
         storage,
         storage_max_bytes,
+        video_muxer,
     });
 
     let mut app = Router::new()
@@ -109,7 +119,14 @@ async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| ws::handle_ws(socket, state.handle.clone(), state.start_time))
+    ws.on_upgrade(move |socket| {
+        ws::handle_ws(
+            socket,
+            state.handle.clone(),
+            Arc::clone(&state.video_muxer),
+            state.start_time,
+        )
+    })
 }
 
 /// GET /api/cameras — list connected cameras
