@@ -387,6 +387,7 @@ impl StorageBackend for LocalStorage {
                     if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
                         anyhow::bail!("statvfs failed: {}", std::io::Error::last_os_error());
                     }
+                    #[allow(clippy::unnecessary_cast)]
                     let available = stat.f_bavail as u64 * stat.f_frsize as u64;
                     Ok(Some(available))
                 }
