@@ -96,8 +96,8 @@ impl Default for Demuxer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::FrameFlags;
+    use bytes::Bytes;
 
     fn make_frame(source: SourceId, channel: Channel) -> Frame {
         Frame {
@@ -213,7 +213,9 @@ mod tests {
         let _rx = demuxer.subscribe_source(subscribed);
 
         // Route frame from a source nobody subscribed to
-        let count = demuxer.route(make_frame(unsubscribed, Channel::Video)).await;
+        let count = demuxer
+            .route(make_frame(unsubscribed, Channel::Video))
+            .await;
         assert_eq!(count, 0);
     }
 

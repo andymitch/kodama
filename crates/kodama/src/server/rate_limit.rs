@@ -281,10 +281,7 @@ mod tests {
     fn frames_within_limit_are_allowed() {
         let limiter = ConnectionRateLimiter::new(make_config());
         for _ in 0..5 {
-            assert_eq!(
-                limiter.check_frame(&Channel::Video, 10),
-                RateCheck::Allowed
-            );
+            assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Allowed);
         }
         assert_eq!(limiter.frames_dropped(), 0);
     }
@@ -294,16 +291,10 @@ mod tests {
         let limiter = ConnectionRateLimiter::new(make_config());
         // Fill the window (5 allowed)
         for _ in 0..5 {
-            assert_eq!(
-                limiter.check_frame(&Channel::Video, 10),
-                RateCheck::Allowed
-            );
+            assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Allowed);
         }
         // 6th should be dropped
-        assert_eq!(
-            limiter.check_frame(&Channel::Video, 10),
-            RateCheck::Dropped
-        );
+        assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Dropped);
         assert_eq!(limiter.frames_dropped(), 1);
     }
 
@@ -314,15 +305,9 @@ mod tests {
 
         // Fill the window
         for _ in 0..5 {
-            assert_eq!(
-                limiter.check_frame(&Channel::Video, 10),
-                RateCheck::Allowed
-            );
+            assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Allowed);
         }
-        assert_eq!(
-            limiter.check_frame(&Channel::Video, 10),
-            RateCheck::Dropped
-        );
+        assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Dropped);
 
         // Simulate time passing by creating a new limiter with an older epoch
         let old_epoch = Instant::now() - Duration::from_millis(1100);
@@ -391,22 +376,13 @@ mod tests {
         let limiter = ConnectionRateLimiter::new(make_config());
         // Fill video (limit=5)
         for _ in 0..5 {
-            assert_eq!(
-                limiter.check_frame(&Channel::Video, 10),
-                RateCheck::Allowed
-            );
+            assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Allowed);
         }
-        assert_eq!(
-            limiter.check_frame(&Channel::Video, 10),
-            RateCheck::Dropped
-        );
+        assert_eq!(limiter.check_frame(&Channel::Video, 10), RateCheck::Dropped);
 
         // Audio should still work (separate window, limit=5)
         for _ in 0..5 {
-            assert_eq!(
-                limiter.check_frame(&Channel::Audio, 10),
-                RateCheck::Allowed
-            );
+            assert_eq!(limiter.check_frame(&Channel::Audio, 10), RateCheck::Allowed);
         }
 
         // Telemetry should also work (limit=2)

@@ -75,11 +75,7 @@ impl NalUnitType {
     /// Note: Excludes data partition slices (PartA/B/C) as they're not well
     /// supported by modern browsers and cause MEDIA_ERR_DECODE errors.
     pub fn is_slice(&self) -> bool {
-        matches!(
-            self,
-            NalUnitType::SliceNonIdr
-                | NalUnitType::SliceIdr
-        )
+        matches!(self, NalUnitType::SliceNonIdr | NalUnitType::SliceIdr)
     }
 }
 
@@ -140,7 +136,10 @@ impl NalParser {
     pub fn feed(&mut self, data: &[u8]) -> Vec<NalUnit> {
         self.buffer.extend_from_slice(data);
         if self.buffer.len() > MAX_NAL_BUFFER_SIZE {
-            tracing::warn!("NAL parser buffer exceeded {} bytes, resetting", MAX_NAL_BUFFER_SIZE);
+            tracing::warn!(
+                "NAL parser buffer exceeded {} bytes, resetting",
+                MAX_NAL_BUFFER_SIZE
+            );
             self.buffer.clear();
             return Vec::new();
         }
@@ -151,13 +150,7 @@ impl NalParser {
     fn extract_nals(&mut self) -> Vec<NalUnit> {
         let mut nals = Vec::new();
 
-        loop {
-            // Find start code
-            let start = match self.find_start_code(0) {
-                Some(pos) => pos,
-                None => break,
-            };
-
+        while let Some(start) = self.find_start_code(0) {
             // Skip the start code
             let start_code_len = self.start_code_len(start);
             let nal_start = start + start_code_len;

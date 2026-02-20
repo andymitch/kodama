@@ -21,9 +21,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{Frame, SourceId};
-use crate::transport::mux::frame::{frame_from_bytes, frame_to_bytes};
 use super::StorageBackend;
+use crate::transport::mux::frame::{frame_from_bytes, frame_to_bytes};
+use crate::{Frame, SourceId};
 
 /// Configuration for cloud storage
 #[derive(Debug, Clone)]
@@ -172,7 +172,9 @@ impl CloudStorage {
 
     /// Get the local cache path for a segment
     fn cache_path(&self, source: SourceId, start_time_us: u64) -> PathBuf {
-        self.config.cache_dir.join(format!("{}_{}.segment", source, start_time_us))
+        self.config
+            .cache_dir
+            .join(format!("{}_{}.segment", source, start_time_us))
     }
 
     /// Upload a file to S3 using AWS CLI
@@ -188,8 +190,7 @@ impl CloudStorage {
 
         cmd.args(["--region", &self.config.region]);
 
-        let output = cmd.output()
-            .context("Failed to run aws s3 cp")?;
+        let output = cmd.output().context("Failed to run aws s3 cp")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -212,8 +213,7 @@ impl CloudStorage {
 
         cmd.args(["--region", &self.config.region]);
 
-        let output = cmd.output()
-            .context("Failed to run aws s3 cp")?;
+        let output = cmd.output().context("Failed to run aws s3 cp")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -236,8 +236,7 @@ impl CloudStorage {
 
         cmd.args(["--region", &self.config.region]);
 
-        let output = cmd.output()
-            .context("Failed to run aws s3 rm")?;
+        let output = cmd.output().context("Failed to run aws s3 rm")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -253,7 +252,10 @@ impl CloudStorage {
 
         let mut cmd = Command::new("aws");
         cmd.args(["s3", "presign", &s3_url]);
-        cmd.args(["--expires-in", &self.config.presigned_url_ttl_secs.to_string()]);
+        cmd.args([
+            "--expires-in",
+            &self.config.presigned_url_ttl_secs.to_string(),
+        ]);
 
         if let Some(ref endpoint) = self.config.endpoint_url {
             cmd.args(["--endpoint-url", endpoint]);
@@ -261,8 +263,7 @@ impl CloudStorage {
 
         cmd.args(["--region", &self.config.region]);
 
-        let output = cmd.output()
-            .context("Failed to run aws s3 presign")?;
+        let output = cmd.output().context("Failed to run aws s3 presign")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -309,13 +310,15 @@ impl CloudStorage {
 
     /// Get or create a local segment for buffering
     async fn get_or_create_segment(&self, source: SourceId, timestamp_us: u64) -> Result<()> {
-        let segment_start = (timestamp_us / self.config.segment_duration_us) * self.config.segment_duration_us;
+        let segment_start =
+            (timestamp_us / self.config.segment_duration_us) * self.config.segment_duration_us;
 
         let mut segments = self.local_segments.write().await;
 
         // Check if we need a new segment
         if let Some(seg) = segments.get(&source) {
-            let seg_start = (seg.start_time_us / self.config.segment_duration_us) * self.config.segment_duration_us;
+            let seg_start = (seg.start_time_us / self.config.segment_duration_us)
+                * self.config.segment_duration_us;
             if seg_start == segment_start {
                 return Ok(());
             }
@@ -344,10 +347,12 @@ impl CloudStorage {
 
     /// Write a frame to the local buffer
     async fn write_frame(&self, frame: &Frame) -> Result<()> {
-        self.get_or_create_segment(frame.source, frame.timestamp_us).await?;
+        self.get_or_create_segment(frame.source, frame.timestamp_us)
+            .await?;
 
         let mut segments = self.local_segments.write().await;
-        let segment = segments.get_mut(&frame.source)
+        let segment = segments
+            .get_mut(&frame.source)
             .context("Segment not found after creation")?;
 
         let frame_bytes = frame_to_bytes(frame);
@@ -400,14 +405,15 @@ impl StorageBackend for CloudStorage {
             let mut offset = 0;
 
             while offset + 4 <= file_data.len() {
-                let len = u32::from_le_bytes(file_data[offset..offset+4].try_into().unwrap()) as usize;
+                let len =
+                    u32::from_le_bytes(file_data[offset..offset + 4].try_into().unwrap()) as usize;
                 offset += 4;
 
                 if offset + len > file_data.len() {
                     break;
                 }
 
-                let frame_bytes = bytes::Bytes::copy_from_slice(&file_data[offset..offset+len]);
+                let frame_bytes = bytes::Bytes::copy_from_slice(&file_data[offset..offset + len]);
                 offset += len;
 
                 let frame = frame_from_bytes(frame_bytes)?;

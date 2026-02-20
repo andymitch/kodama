@@ -8,11 +8,9 @@ use anyhow::Result;
 use iroh::endpoint::{RecvStream, SendStream};
 use tokio::sync::Mutex;
 
-use crate::{Frame, CommandMessage, ClientCommandMessage};
+use super::mux::command::{read_client_command, read_command, write_client_command, write_command};
 use super::mux::frame::{read_frame, write_frame};
-use super::mux::command::{
-    read_command, write_command, read_client_command, write_client_command,
-};
+use crate::{ClientCommandMessage, CommandMessage, Frame};
 
 /// A sender for streaming frames over a persistent QUIC stream
 pub struct FrameSender {

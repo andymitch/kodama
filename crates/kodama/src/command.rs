@@ -178,7 +178,10 @@ pub enum NetworkAction {
     /// List available WiFi networks
     ScanWifi,
     /// Connect to a WiFi network
-    ConnectWifi { ssid: String, password: RedactedString },
+    ConnectWifi {
+        ssid: String,
+        password: RedactedString,
+    },
     /// Disconnect from WiFi
     DisconnectWifi,
     /// Get current network info

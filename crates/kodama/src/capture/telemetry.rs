@@ -234,12 +234,14 @@ impl SparseTelemetry {
             has_changes = true;
         }
 
-        if current.network_tx_bytes.abs_diff(previous.network_tx_bytes) >= thresholds.network_bytes {
+        if current.network_tx_bytes.abs_diff(previous.network_tx_bytes) >= thresholds.network_bytes
+        {
             sparse.network_tx_bytes = Some(current.network_tx_bytes);
             has_changes = true;
         }
 
-        if current.network_rx_bytes.abs_diff(previous.network_rx_bytes) >= thresholds.network_bytes {
+        if current.network_rx_bytes.abs_diff(previous.network_rx_bytes) >= thresholds.network_bytes
+        {
             sparse.network_rx_bytes = Some(current.network_rx_bytes);
             has_changes = true;
         }
@@ -250,7 +252,9 @@ impl SparseTelemetry {
             has_changes = true;
         }
 
-        let la_changed = current.load_average.iter()
+        let la_changed = current
+            .load_average
+            .iter()
             .zip(previous.load_average.iter())
             .any(|(c, p)| (c - p).abs() >= thresholds.load_average);
         if la_changed {
@@ -304,19 +308,39 @@ impl SparseTelemetry {
             _ => {}
         }
 
-        if has_changes { Some(sparse) } else { None }
+        if has_changes {
+            Some(sparse)
+        } else {
+            None
+        }
     }
 
     /// Merge this sparse update into a full TelemetryData state
     pub fn merge_into(&self, state: &mut TelemetryData) {
-        if let Some(v) = self.cpu_usage { state.cpu_usage = v; }
-        if let Some(v) = self.cpu_temp { state.cpu_temp = Some(v); }
-        if let Some(v) = self.memory_usage { state.memory_usage = v; }
-        if let Some(v) = self.disk_usage { state.disk_usage = v; }
-        if let Some(v) = self.network_tx_bytes { state.network_tx_bytes = v; }
-        if let Some(v) = self.network_rx_bytes { state.network_rx_bytes = v; }
-        if let Some(v) = self.uptime_secs { state.uptime_secs = v; }
-        if let Some(v) = self.load_average { state.load_average = v; }
+        if let Some(v) = self.cpu_usage {
+            state.cpu_usage = v;
+        }
+        if let Some(v) = self.cpu_temp {
+            state.cpu_temp = Some(v);
+        }
+        if let Some(v) = self.memory_usage {
+            state.memory_usage = v;
+        }
+        if let Some(v) = self.disk_usage {
+            state.disk_usage = v;
+        }
+        if let Some(v) = self.network_tx_bytes {
+            state.network_tx_bytes = v;
+        }
+        if let Some(v) = self.network_rx_bytes {
+            state.network_rx_bytes = v;
+        }
+        if let Some(v) = self.uptime_secs {
+            state.uptime_secs = v;
+        }
+        if let Some(v) = self.load_average {
+            state.load_average = v;
+        }
         if let Some(ref g) = self.gps {
             state.gps = Some(GpsData {
                 latitude: g.latitude,
@@ -327,20 +351,20 @@ impl SparseTelemetry {
                 fix_mode: g.fix_mode,
             });
         }
-        if let Some(v) = self.motion_level { state.motion_level = Some(v); }
+        if let Some(v) = self.motion_level {
+            state.motion_level = Some(v);
+        }
     }
 
     /// Serialize to msgpack bytes
     pub fn to_bytes(&self) -> Result<Bytes> {
-        let data = rmp_serde::to_vec_named(self)
-            .context("Failed to serialize sparse telemetry")?;
+        let data = rmp_serde::to_vec_named(self).context("Failed to serialize sparse telemetry")?;
         Ok(Bytes::from(data))
     }
 
     /// Deserialize from msgpack bytes
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
-        rmp_serde::from_slice(data)
-            .context("Failed to deserialize sparse telemetry")
+        rmp_serde::from_slice(data).context("Failed to deserialize sparse telemetry")
     }
 }
 
@@ -405,7 +429,8 @@ impl TelemetryCapture {
         let heartbeat_secs = config.heartbeat_interval_secs;
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs as u64));
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(config.interval_secs as u64));
             let mut prev_cpu_stats: Option<CpuStats> = None;
             let mut gps_reader = if config.enable_gps {
                 GpsdReader::new().await
@@ -413,7 +438,8 @@ impl TelemetryCapture {
                 None
             };
             let mut last_sent: Option<TelemetryData> = None;
-            let mut last_heartbeat = Instant::now() - Duration::from_secs(heartbeat_secs as u64 + 1);
+            let mut last_heartbeat =
+                Instant::now() - Duration::from_secs(heartbeat_secs as u64 + 1);
 
             loop {
                 tokio::select! {
@@ -442,10 +468,10 @@ impl TelemetryCapture {
 
                                         let is_heartbeat = last_heartbeat.elapsed() >= Duration::from_secs(heartbeat_secs as u64);
 
-                                        let sparse = if is_heartbeat || last_sent.is_none() {
-                                            Some(SparseTelemetry::from_full(&data))
-                                        } else {
-                                            SparseTelemetry::diff(&data, last_sent.as_ref().unwrap(), &thresholds)
+                                        let sparse = match last_sent.as_ref() {
+                                            None => Some(SparseTelemetry::from_full(&data)),
+                                            _ if is_heartbeat => Some(SparseTelemetry::from_full(&data)),
+                                            Some(prev) => SparseTelemetry::diff(&data, prev, &thresholds),
                                         };
 
                                         if let Some(payload) = sparse {
@@ -484,7 +510,12 @@ impl TelemetryCapture {
             }
         });
 
-        Ok((Self { shutdown_tx: Some(shutdown_tx) }, rx))
+        Ok((
+            Self {
+                shutdown_tx: Some(shutdown_tx),
+            },
+            rx,
+        ))
     }
 
     /// Stop collection
@@ -522,7 +553,10 @@ impl CpuStats {
 }
 
 /// Collect all telemetry data
-fn collect_telemetry(config: &TelemetryCaptureConfig, prev_cpu: &mut Option<CpuStats>) -> Result<TelemetryData> {
+fn collect_telemetry(
+    config: &TelemetryCaptureConfig,
+    prev_cpu: &mut Option<CpuStats>,
+) -> Result<TelemetryData> {
     let mut data = TelemetryData::default();
 
     // CPU usage (compare with previous sample)
@@ -575,10 +609,10 @@ fn collect_telemetry(config: &TelemetryCaptureConfig, prev_cpu: &mut Option<CpuS
 
 /// Read CPU stats from /proc/stat
 fn read_cpu_stats() -> Result<CpuStats> {
-    let content = fs::read_to_string("/proc/stat")
-        .context("Failed to read /proc/stat")?;
+    let content = fs::read_to_string("/proc/stat").context("Failed to read /proc/stat")?;
 
-    let cpu_line = content.lines()
+    let cpu_line = content
+        .lines()
         .find(|line| line.starts_with("cpu "))
         .context("No cpu line in /proc/stat")?;
 
@@ -625,8 +659,7 @@ fn read_cpu_temp() -> Result<f32> {
 
 /// Read memory info from /proc/meminfo
 fn read_memory_info() -> Result<(u64, u64)> {
-    let content = fs::read_to_string("/proc/meminfo")
-        .context("Failed to read /proc/meminfo")?;
+    let content = fs::read_to_string("/proc/meminfo").context("Failed to read /proc/meminfo")?;
 
     let mut total: u64 = 0;
     let mut available: u64 = 0;
@@ -676,8 +709,7 @@ fn read_disk_usage(_path: &str) -> Result<(u64, u64)> {
 
 /// Read network stats from /proc/net/dev
 fn read_network_stats(interface: Option<&str>) -> Result<(u64, u64)> {
-    let content = fs::read_to_string("/proc/net/dev")
-        .context("Failed to read /proc/net/dev")?;
+    let content = fs::read_to_string("/proc/net/dev").context("Failed to read /proc/net/dev")?;
 
     let mut total_rx: u64 = 0;
     let mut total_tx: u64 = 0;
@@ -714,22 +746,21 @@ fn read_network_stats(interface: Option<&str>) -> Result<(u64, u64)> {
 
 /// Read uptime from /proc/uptime
 fn read_uptime() -> Result<u64> {
-    let content = fs::read_to_string("/proc/uptime")
-        .context("Failed to read /proc/uptime")?;
+    let content = fs::read_to_string("/proc/uptime").context("Failed to read /proc/uptime")?;
 
-    let uptime_str = content.split_whitespace().next()
+    let uptime_str = content
+        .split_whitespace()
+        .next()
         .context("Empty /proc/uptime")?;
 
-    let uptime_secs: f64 = uptime_str.parse()
-        .context("Invalid uptime value")?;
+    let uptime_secs: f64 = uptime_str.parse().context("Invalid uptime value")?;
 
     Ok(uptime_secs as u64)
 }
 
 /// Read load average from /proc/loadavg
 fn read_load_average() -> Result<[f32; 3]> {
-    let content = fs::read_to_string("/proc/loadavg")
-        .context("Failed to read /proc/loadavg")?;
+    let content = fs::read_to_string("/proc/loadavg").context("Failed to read /proc/loadavg")?;
 
     let parts: Vec<f32> = content
         .split_whitespace()
@@ -802,7 +833,9 @@ async fn gpsd_read_loop(stream: tokio::net::TcpStream, tx: mpsc::Sender<GpsData>
     let (reader, mut writer) = stream.into_split();
 
     // Enable JSON watch mode
-    writer.write_all(b"?WATCH={\"enable\":true,\"json\":true}\n").await
+    writer
+        .write_all(b"?WATCH={\"enable\":true,\"json\":true}\n")
+        .await
         .context("Failed to send WATCH to gpsd")?;
 
     let mut lines = BufReader::new(reader).lines();
@@ -1043,7 +1076,7 @@ mod tests {
         let current = TelemetryData {
             cpu_usage: 60.0,
             cpu_temp: Some(60.5), // below 1.0 threshold
-            memory_usage: 71.0, // below 5.0 threshold
+            memory_usage: 71.0,   // below 5.0 threshold
             disk_usage: 80.0,
             network_tx_bytes: 100_500, // below 10KB threshold
             network_rx_bytes: 200_000,
@@ -1167,7 +1200,11 @@ mod tests {
             detector.update(false, 5000);
         }
         let steady = f32::from_bits(level.load(Ordering::Relaxed));
-        assert!(steady < 0.05, "Steady frames should have very low motion: {}", steady);
+        assert!(
+            steady < 0.05,
+            "Steady frames should have very low motion: {}",
+            steady
+        );
     }
 
     #[test]
@@ -1184,7 +1221,11 @@ mod tests {
             detector.update(false, 15000);
         }
         let motion = f32::from_bits(level.load(Ordering::Relaxed));
-        assert!(motion > 0.2, "Large frames should indicate motion: {}", motion);
+        assert!(
+            motion > 0.2,
+            "Large frames should indicate motion: {}",
+            motion
+        );
 
         // Motion should persist (slow decay) even after a few normal frames
         for _ in 0..10 {
@@ -1206,6 +1247,10 @@ mod tests {
             detector.update(true, 50000);
         }
         let motion = f32::from_bits(level.load(Ordering::Relaxed));
-        assert!(motion < 0.05, "Keyframes should not trigger motion: {}", motion);
+        assert!(
+            motion < 0.05,
+            "Keyframes should not trigger motion: {}",
+            motion
+        );
     }
 }

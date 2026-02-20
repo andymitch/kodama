@@ -5,9 +5,9 @@
 //! them back apart at the receiving end.
 
 pub mod command;
+pub mod demuxer;
 pub mod frame;
 pub mod muxer;
-pub mod demuxer;
 
-pub use muxer::{FrameBuffer, BackpressureSender, BufferStats};
 pub use demuxer::Demuxer;
+pub use muxer::{BackpressureSender, BufferStats, FrameBuffer};

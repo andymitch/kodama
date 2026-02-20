@@ -6,16 +6,16 @@
 //! - Frame demultiplexing for routing
 //! - Persistent QUIC streams for efficient video streaming
 
-mod endpoint;
 mod connection;
+mod endpoint;
 
 pub mod mux;
 
+pub use connection::{ClientCommandReceiver, ClientCommandSender, ClientCommandStream};
+pub use connection::{CommandReceiver, CommandSender, CommandStream};
+pub use connection::{FrameReceiver, FrameSender, FrameStream};
 pub use endpoint::KodamaEndpoint;
-pub use connection::{FrameSender, FrameReceiver, FrameStream};
-pub use connection::{CommandSender, CommandReceiver, CommandStream};
-pub use connection::{ClientCommandSender, ClientCommandReceiver, ClientCommandStream};
-pub use mux::{FrameBuffer, BackpressureSender, BufferStats, Demuxer};
+pub use mux::{BackpressureSender, BufferStats, Demuxer, FrameBuffer};
 
 use anyhow::Result;
 use iroh::endpoint::Connection;
@@ -81,7 +81,9 @@ pub struct RelayConnection {
 
 impl RelayConnection {
     pub(crate) fn new(conn: Connection) -> Self {
-        Self { conn: Arc::new(conn) }
+        Self {
+            conn: Arc::new(conn),
+        }
     }
 
     /// Create a RelayConnection from a raw iroh Connection.
@@ -185,8 +187,8 @@ impl RelayConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::{Channel, FrameFlags, SourceId, ALPN};
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn test_relay_creation() {
@@ -258,9 +260,8 @@ mod tests {
         let server_addr = server.endpoint().endpoint().addr();
 
         let server_clone = Arc::clone(&server);
-        let accept_task = tokio::spawn(async move {
-            server_clone.endpoint().accept().await.unwrap()
-        });
+        let accept_task =
+            tokio::spawn(async move { server_clone.endpoint().accept().await.unwrap() });
 
         let client_ep = client.endpoint().endpoint().clone();
         let connect_task = tokio::spawn(async move {

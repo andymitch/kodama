@@ -26,11 +26,11 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
-use kodama::Frame;
 use kodama::server::{
-    LocalStorage, LocalStorageConfig, Relay, Router, StorageBackend, StorageConfig,
-    StorageManager, StorageStats,
+    LocalStorage, LocalStorageConfig, Relay, Router, StorageBackend, StorageConfig, StorageManager,
+    StorageStats,
 };
+use kodama::Frame;
 
 /// Server configuration from environment
 struct Config {
@@ -55,9 +55,7 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(512);
 
-        let storage_path = std::env::var("KODAMA_STORAGE_PATH")
-            .map(PathBuf::from)
-            .ok();
+        let storage_path = std::env::var("KODAMA_STORAGE_PATH").map(PathBuf::from).ok();
 
         let storage_max_gb: u64 = std::env::var("KODAMA_STORAGE_MAX_GB")
             .ok()
@@ -84,9 +82,7 @@ impl Config {
             .or_else(|| {
                 // Auto-detect: check common locations relative to binary
                 let candidates = ["./ui/build", "../ui/build", "./build"];
-                candidates.iter()
-                    .map(PathBuf::from)
-                    .find(|p| p.exists())
+                candidates.iter().map(PathBuf::from).find(|p| p.exists())
             });
 
         Self {
@@ -256,8 +252,9 @@ async fn main() -> Result<()> {
     let web_ui_path = config.ui_path.clone();
     let web_cancel = cancel.clone();
     let web_public_key = Some(public_key.clone());
-    let web_storage: Option<Arc<dyn kodama::web::StorageStatsProvider>> =
-        storage.clone().map(|s| s as Arc<dyn kodama::web::StorageStatsProvider>);
+    let web_storage: Option<Arc<dyn kodama::web::StorageStatsProvider>> = storage
+        .clone()
+        .map(|s| s as Arc<dyn kodama::web::StorageStatsProvider>);
     let web_storage_max = storage.as_ref().map(|s| s.max_bytes).unwrap_or(0);
     tracker.spawn(async move {
         tokio::select! {
@@ -400,7 +397,10 @@ async fn run_headless(
         }
     }
 
-    if tokio::time::timeout(Duration::from_secs(5), tracker.wait()).await.is_err() {
+    if tokio::time::timeout(Duration::from_secs(5), tracker.wait())
+        .await
+        .is_err()
+    {
         warn!("Shutdown timed out after 5s");
     }
     Ok(())

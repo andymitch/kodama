@@ -181,7 +181,10 @@ fn run_audio_capture(
 
     info!(
         "Audio capture started: {}Hz {}ch → {}Hz mono, {}ms buffers",
-        source_rate, channels, target_rate, target_samples * 1000 / target_rate as usize,
+        source_rate,
+        channels,
+        target_rate,
+        target_samples * 1000 / target_rate as usize,
     );
 
     // Accumulator for fixed-size output buffers
@@ -204,7 +207,7 @@ fn run_audio_capture(
                     let pcm = f32_to_s16le(&buffer);
 
                     packet_count += 1;
-                    if packet_count % 500 == 0 {
+                    if packet_count.is_multiple_of(500) {
                         let duration_secs =
                             packet_count * (target_samples as u64) / target_rate as u64;
                         debug!(
@@ -453,10 +456,10 @@ mod tests {
 
         // Receive a few buffers
         for _ in 0..3 {
-            let buffer = tokio::time::timeout(
-                Duration::from_millis(100),
-                rx.recv()
-            ).await.unwrap().unwrap();
+            let buffer = tokio::time::timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
 
             // 960 samples * 2 bytes = 1920
             assert_eq!(buffer.len(), 1920);

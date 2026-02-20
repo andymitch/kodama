@@ -23,9 +23,9 @@ impl KodamaEndpoint {
         let secret_key = match key_path {
             Some(path) if path.exists() => {
                 let bytes = std::fs::read(path)?;
-                let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-                    anyhow::anyhow!("Invalid key file length, expected 32 bytes")
-                })?;
+                let bytes: [u8; 32] = bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Invalid key file length, expected 32 bytes"))?;
                 SecretKey::from_bytes(&bytes)
             }
             Some(path) => {

@@ -6,16 +6,18 @@
 //! - Manages client connections and permissions
 //! - Optionally stores frames to local or cloud storage
 
-mod router;
 mod rate_limit;
+mod router;
 mod storage;
 
-pub use router::{Router, RouterHandle, RouterStats, PeerRole, PeerDetail};
 pub use rate_limit::RateLimitConfig;
-pub use storage::{StorageManager, StorageConfig, StorageStats};
+pub use router::{PeerDetail, PeerRole, Router, RouterHandle, RouterStats};
+pub use storage::{StorageConfig, StorageManager, StorageStats};
 
 // Re-export transport and storage types for convenience
-pub use crate::transport::{Relay, RelayConnection, FrameReceiver, FrameSender};
-pub use crate::transport::{CommandSender, CommandReceiver, CommandStream};
-pub use crate::transport::{ClientCommandSender, ClientCommandReceiver, ClientCommandStream};
-pub use crate::storage::{StorageBackend, LocalStorage, LocalStorageConfig, CloudStorage, CloudStorageConfig};
+pub use crate::storage::{
+    CloudStorage, CloudStorageConfig, LocalStorage, LocalStorageConfig, StorageBackend,
+};
+pub use crate::transport::{ClientCommandReceiver, ClientCommandSender, ClientCommandStream};
+pub use crate::transport::{CommandReceiver, CommandSender, CommandStream};
+pub use crate::transport::{FrameReceiver, FrameSender, Relay, RelayConnection};

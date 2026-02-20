@@ -18,7 +18,11 @@ impl SourceId {
 
     /// Generate from Iroh NodeId bytes (truncates to first 8 bytes)
     pub fn from_node_id_bytes(bytes: &[u8]) -> Self {
-        assert!(bytes.len() >= 8, "NodeId bytes must be at least 8 bytes, got {}", bytes.len());
+        assert!(
+            bytes.len() >= 8,
+            "NodeId bytes must be at least 8 bytes, got {}",
+            bytes.len()
+        );
         let mut id = [0u8; 8];
         id.copy_from_slice(&bytes[..8]);
         Self(id)

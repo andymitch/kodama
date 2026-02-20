@@ -4,11 +4,11 @@
 //! - Local filesystem storage
 //! - Cloud storage (S3/R2)
 
-pub mod local;
 pub mod cloud;
+pub mod local;
 
-use anyhow::Result;
 use crate::{Frame, SourceId};
+use anyhow::Result;
 
 /// Storage backend trait
 #[async_trait::async_trait]
@@ -34,5 +34,5 @@ pub trait StorageBackend: Send + Sync {
     async fn available_bytes(&self) -> Result<Option<u64>>;
 }
 
-pub use local::{LocalStorage, LocalStorageConfig};
 pub use cloud::{CloudStorage, CloudStorageConfig};
+pub use local::{LocalStorage, LocalStorageConfig};

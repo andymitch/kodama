@@ -9,8 +9,8 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{Frame, SourceId};
 use crate::storage::StorageBackend;
+use crate::{Frame, SourceId};
 
 /// Storage configuration
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             max_size_bytes: 10 * 1024 * 1024 * 1024, // 10 GB
-            retention_secs: 7 * 24 * 60 * 60,         // 7 days
+            retention_secs: 7 * 24 * 60 * 60,        // 7 days
             keyframes_only: false,
             cleanup_interval_secs: 3600, // 1 hour
         }
@@ -104,7 +104,9 @@ impl StorageManager {
         start_time_us: u64,
         end_time_us: u64,
     ) -> Result<Vec<Frame>> {
-        self.backend.get_frames(source, start_time_us, end_time_us).await
+        self.backend
+            .get_frames(source, start_time_us, end_time_us)
+            .await
     }
 
     /// Get storage statistics
@@ -162,7 +164,8 @@ impl StorageManager {
         let config = self.config.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(config.cleanup_interval_secs));
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(config.cleanup_interval_secs));
 
             loop {
                 tokio::select! {
@@ -217,8 +220,8 @@ impl Drop for StorageManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Channel, FrameFlags};
     use crate::storage::{LocalStorage, LocalStorageConfig};
+    use crate::{Channel, FrameFlags};
     use bytes::Bytes;
     use tempfile::tempdir;
 

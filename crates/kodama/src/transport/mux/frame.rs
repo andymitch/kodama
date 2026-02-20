@@ -79,7 +79,9 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -
     let bytes = frame_to_bytes(frame);
 
     // Write length prefix
-    writer.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
+    writer
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .await?;
 
     // Write frame data
     writer.write_all(&bytes).await?;
@@ -95,11 +97,19 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Frame> {
     let len = u32::from_be_bytes(len_bytes) as usize;
 
     if len > MAX_FRAME_PAYLOAD_SIZE {
-        anyhow::bail!("Frame length exceeds maximum: {} > {}", len, MAX_FRAME_PAYLOAD_SIZE);
+        anyhow::bail!(
+            "Frame length exceeds maximum: {} > {}",
+            len,
+            MAX_FRAME_PAYLOAD_SIZE
+        );
     }
 
     if len < FRAME_HEADER_SIZE {
-        anyhow::bail!("Frame length too small for header: {} < {}", len, FRAME_HEADER_SIZE);
+        anyhow::bail!(
+            "Frame length too small for header: {} < {}",
+            len,
+            FRAME_HEADER_SIZE
+        );
     }
 
     // Read frame data
@@ -140,7 +150,12 @@ mod tests {
     #[tokio::test]
     async fn test_read_write_frame() {
         let frame = make_frame(Bytes::from_static(b"test payload"));
-        let frame = Frame { channel: Channel::Audio, flags: FrameFlags::default(), timestamp_us: 999, ..frame };
+        let frame = Frame {
+            channel: Channel::Audio,
+            flags: FrameFlags::default(),
+            timestamp_us: 999,
+            ..frame
+        };
 
         // Write to buffer
         let mut buf = Vec::new();
@@ -261,7 +276,10 @@ mod tests {
 
         let result = read_frame(&mut cursor).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("too small for header"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("too small for header"));
     }
 
     #[tokio::test]

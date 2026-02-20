@@ -110,9 +110,9 @@ impl VideoCapture {
             "--codec".to_string(),
             "h264".to_string(),
             "-o".to_string(),
-            "-".to_string(), // Output to stdout
+            "-".to_string(),       // Output to stdout
             "--flush".to_string(), // Flush output immediately
-            "-n".to_string(), // No preview window (headless)
+            "-n".to_string(),      // No preview window (headless)
         ];
 
         if config.inline_headers {
@@ -130,7 +130,13 @@ impl VideoCapture {
         }
 
         // Try rpicam-vid first (modern Pi OS), fall back to libcamera-vid (legacy)
-        let cmd = if Command::new("rpicam-vid").arg("--help").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+        let cmd = if Command::new("rpicam-vid")
+            .arg("--help")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+        {
             "rpicam-vid"
         } else {
             "libcamera-vid"
@@ -138,8 +144,15 @@ impl VideoCapture {
 
         info!(
             "Starting {}: {}x{} @ {}fps, bitrate={}",
-            cmd, config.width, config.height, config.fps,
-            if config.bitrate > 0 { format!("{} bps", config.bitrate) } else { "auto".to_string() },
+            cmd,
+            config.width,
+            config.height,
+            config.fps,
+            if config.bitrate > 0 {
+                format!("{} bps", config.bitrate)
+            } else {
+                "auto".to_string()
+            },
         );
         debug!("{} args: {:?}", cmd, args);
 
@@ -181,12 +194,19 @@ impl VideoCapture {
     /// frames arrive starting with a keyframe (guaranteed by `--inline`).
     pub fn update_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
         if self.config.bitrate == bitrate_bps {
-            debug!("ABR: bitrate unchanged at {} bps, skipping restart", bitrate_bps);
+            debug!(
+                "ABR: bitrate unchanged at {} bps, skipping restart",
+                bitrate_bps
+            );
             return Ok(());
         }
         info!(
             "ABR: updating bitrate {} -> {} bps",
-            if self.config.bitrate > 0 { self.config.bitrate.to_string() } else { "auto".to_string() },
+            if self.config.bitrate > 0 {
+                self.config.bitrate.to_string()
+            } else {
+                "auto".to_string()
+            },
             bitrate_bps,
         );
         self.stop_process();
@@ -195,7 +215,11 @@ impl VideoCapture {
     }
 
     /// Read video stream from stdout and send chunks to channel
-    fn read_video_stream<R: Read>(mut reader: R, tx: mpsc::Sender<Bytes>, config: &VideoCaptureConfig) {
+    fn read_video_stream<R: Read>(
+        mut reader: R,
+        tx: mpsc::Sender<Bytes>,
+        config: &VideoCaptureConfig,
+    ) {
         // Buffer size: aim for ~1 frame worth of data at estimated bitrate
         // Default H.264 at 720p30 is roughly 2-4 Mbps, so ~10-15KB per frame
         let buf_size = if config.bitrate > 0 {
@@ -218,7 +242,7 @@ impl VideoCapture {
                     total_bytes += n as u64;
                     chunk_count += 1;
 
-                    if chunk_count % 100 == 0 {
+                    if chunk_count.is_multiple_of(100) {
                         debug!(
                             "Video capture: {} chunks, {} bytes total",
                             chunk_count, total_bytes
@@ -271,9 +295,7 @@ pub struct TestSourceConfig {
 #[cfg(feature = "test-source")]
 impl Default for TestSourceConfig {
     fn default() -> Self {
-        Self {
-            fps: 30,
-        }
+        Self { fps: 30 }
     }
 }
 
@@ -316,7 +338,7 @@ fn split_h264_frames(data: &[u8]) -> Vec<(Vec<u8>, bool)> {
         let nal_data = &data[nal_start..nal_end];
 
         match nal_type {
-            7 | 8 | 6 => {
+            6..=8 => {
                 // SPS, PPS, SEI - accumulate into keyframe
                 current_frame.extend_from_slice(nal_data);
                 is_keyframe = true;
@@ -353,9 +375,9 @@ fn split_h264_frames(data: &[u8]) -> Vec<(Vec<u8>, bool)> {
 fn h264_filler_nal(size: usize) -> Vec<u8> {
     let mut nal = Vec::with_capacity(size + 5);
     nal.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x0C]); // start code + filler type
-    // Filler bytes (0xFF per spec), then RBSP stop bit (0x80)
+                                                            // Filler bytes (0xFF per spec), then RBSP stop bit (0x80)
     let payload_len = size.saturating_sub(1);
-    nal.extend(std::iter::repeat(0xFF).take(payload_len));
+    nal.extend(std::iter::repeat_n(0xFF, payload_len));
     nal.push(0x80);
     nal
 }
@@ -419,7 +441,7 @@ pub fn start_test_source(config: TestSourceConfig) -> mpsc::Receiver<Bytes> {
                 break;
             }
 
-            if total_sent % 300 == 0 {
+            if total_sent.is_multiple_of(300) {
                 debug!("Test source: {} frames sent", total_sent);
             }
         }

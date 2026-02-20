@@ -3,20 +3,19 @@
 use anyhow::Result;
 use iroh::PublicKey;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, oneshot, RwLock};
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::{
-    Frame, Command, CommandMessage, CommandRequest, CommandResponse, CommandResult,
-    ClientCommandMessage,
-};
 use crate::transport::{
-    RelayConnection, FrameReceiver,
-    CommandSender, CommandStream, ClientCommandStream,
+    ClientCommandStream, CommandSender, CommandStream, FrameReceiver, RelayConnection,
+};
+use crate::{
+    ClientCommandMessage, Command, CommandMessage, CommandRequest, CommandResponse, CommandResult,
+    Frame,
 };
 
 use super::rate_limit::{ConnectionRateLimiter, RateCheck, RateLimitConfig};
@@ -184,14 +183,34 @@ impl Router {
     /// Returns a generation counter that must be passed to `unregister_peer`
     /// to prevent stale connection handlers from removing newer registrations.
     async fn register_peer(&self, key: PublicKey, role: PeerRole) -> u64 {
-        let gen = self.inner.connection_generation.fetch_add(1, Ordering::Relaxed);
+        let gen = self
+            .inner
+            .connection_generation
+            .fetch_add(1, Ordering::Relaxed);
         let mut peers = self.inner.peers.write().await;
 
-        let old = peers.insert(key, PeerInfo { role, generation: gen, connected_at: Instant::now() });
+        let old = peers.insert(
+            key,
+            PeerInfo {
+                role,
+                generation: gen,
+                connected_at: Instant::now(),
+            },
+        );
         if old.is_none() {
             match role {
-                PeerRole::Camera => { self.inner.stats.cameras_connected.fetch_add(1, Ordering::Relaxed); }
-                PeerRole::Client => { self.inner.stats.clients_connected.fetch_add(1, Ordering::Relaxed); }
+                PeerRole::Camera => {
+                    self.inner
+                        .stats
+                        .cameras_connected
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                PeerRole::Client => {
+                    self.inner
+                        .stats
+                        .clients_connected
+                        .fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -211,8 +230,18 @@ impl Router {
                 let role = info.role;
                 peers.remove(&key);
                 match role {
-                    PeerRole::Camera => { self.inner.stats.cameras_connected.fetch_sub(1, Ordering::Relaxed); }
-                    PeerRole::Client => { self.inner.stats.clients_connected.fetch_sub(1, Ordering::Relaxed); }
+                    PeerRole::Camera => {
+                        self.inner
+                            .stats
+                            .cameras_connected
+                            .fetch_sub(1, Ordering::Relaxed);
+                    }
+                    PeerRole::Client => {
+                        self.inner
+                            .stats
+                            .clients_connected
+                            .fetch_sub(1, Ordering::Relaxed);
+                    }
                 }
                 info!(?role, peer = %key, generation, "Peer unregistered");
             } else {
@@ -228,12 +257,18 @@ impl Router {
 
     /// Broadcast a frame to all subscribers
     pub async fn broadcast_frame(&self, frame: Frame) {
-        self.inner.stats.frames_received.fetch_add(1, Ordering::Relaxed);
+        self.inner
+            .stats
+            .frames_received
+            .fetch_add(1, Ordering::Relaxed);
 
         // Broadcast to all subscribers
         match self.inner.frame_tx.send(frame) {
             Ok(n) => {
-                self.inner.stats.frames_broadcast.fetch_add(1, Ordering::Relaxed);
+                self.inner
+                    .stats
+                    .frames_broadcast
+                    .fetch_add(1, Ordering::Relaxed);
                 debug!(subscribers = n, "Frame broadcast");
             }
             Err(_) => {
@@ -433,7 +468,11 @@ impl Router {
         // Store state
         let inner2 = Arc::clone(&self.inner);
         tokio::spawn(async move {
-            inner2.camera_commands.write().await.insert(key, state_clone.clone());
+            inner2
+                .camera_commands
+                .write()
+                .await
+                .insert(key, state_clone.clone());
 
             // Read responses from camera and dispatch to pending oneshot channels
             let receiver = stream.receiver;
@@ -481,7 +520,9 @@ impl Router {
     ) -> Result<CommandResponse> {
         let state = {
             let commands = self.inner.camera_commands.read().await;
-            commands.get(&camera_key).cloned()
+            commands
+                .get(&camera_key)
+                .cloned()
                 .ok_or_else(|| anyhow::anyhow!("Camera {} has no command channel", camera_key))?
         };
 
@@ -545,11 +586,10 @@ impl Router {
                     };
 
                     // Forward to camera with 30-second timeout
-                    let result = match self.send_command(
-                        camera_key,
-                        targeted.command,
-                        Duration::from_secs(30),
-                    ).await {
+                    let result = match self
+                        .send_command(camera_key, targeted.command, Duration::from_secs(30))
+                        .await
+                    {
                         Ok(camera_resp) => CommandResponse {
                             id: targeted.id,
                             result: camera_resp.result,
@@ -584,15 +624,21 @@ impl Router {
 
     /// Get list of cameras that have command channels
     pub async fn cameras_with_commands(&self) -> Vec<PublicKey> {
-        self.inner.camera_commands.read().await.keys().copied().collect()
+        self.inner
+            .camera_commands
+            .read()
+            .await
+            .keys()
+            .copied()
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::{FrameFlags, SourceId};
+    use bytes::Bytes;
 
     fn make_key(seed: u8) -> PublicKey {
         use rand::SeedableRng;

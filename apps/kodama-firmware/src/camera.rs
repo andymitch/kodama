@@ -3,26 +3,22 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use iroh::PublicKey;
+use kodama::capture::{
+    h264, AbrConfig, AbrController, AbrDecision, AudioCapture, AudioCaptureConfig, MotionDetector,
+    QualityTier, TelemetryCapture, TelemetryCaptureConfig, ThroughputTracker, VideoCaptureConfig,
+};
+use kodama::transport::{CommandStream, Relay};
+use kodama::{
+    CameraStatus, Command, CommandMessage, CommandResponse, CommandResult, ConfigureParams,
+    DeleteRecordingParams, Frame, NetworkAction, NetworkParams, RecordParams, SendRecordingParams,
+    SourceId, StreamParams, UpdateFirmwareParams,
+};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tracing::{debug, error, info, warn};
-use kodama::{
-    Frame, SourceId,
-    Command, CommandMessage, CommandResponse, CommandResult, CameraStatus,
-    ConfigureParams, RecordParams, UpdateFirmwareParams, NetworkParams, NetworkAction,
-    DeleteRecordingParams, SendRecordingParams, StreamParams,
-};
-use kodama::transport::{Relay, CommandStream};
-use kodama::capture::{
-    h264,
-    AbrConfig, AbrController, AbrDecision, QualityTier, ThroughputTracker,
-    AudioCapture, AudioCaptureConfig,
-    MotionDetector, TelemetryCapture, TelemetryCaptureConfig,
-    VideoCaptureConfig,
-};
 
 /// Camera configuration from environment/args
 struct Config {
@@ -51,8 +47,8 @@ impl Config {
         let server_key_str = std::env::var("KODAMA_SERVER_KEY")
             .context("KODAMA_SERVER_KEY environment variable not set")?;
 
-        let server_key = PublicKey::from_str(&server_key_str)
-            .context("Invalid KODAMA_SERVER_KEY format")?;
+        let server_key =
+            PublicKey::from_str(&server_key_str).context("Invalid KODAMA_SERVER_KEY format")?;
 
         let key_path = std::env::var("KODAMA_KEY_PATH")
             .map(PathBuf::from)
@@ -102,8 +98,10 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0001);
 
-        let mut telemetry_thresholds = kodama::capture::TelemetryThresholds::default();
-        telemetry_thresholds.lat_lon = gps_threshold;
+        let telemetry_thresholds = kodama::capture::TelemetryThresholds {
+            lat_lon: gps_threshold,
+            ..Default::default()
+        };
 
         Ok(Self {
             server_key,
@@ -164,10 +162,30 @@ async fn run_async() -> Result<()> {
     let abr_enabled = config.enable_abr && !config.test_source;
 
     info!("Kodama Camera {} starting", version_string());
-    info!("  Video: {}x{} @ {}fps", config.video.width, config.video.height, config.video.fps);
-    info!("  Audio: {}", if config.enable_audio { "enabled" } else { "disabled" });
-    info!("  Telemetry: {}", if config.enable_telemetry { "enabled" } else { "disabled" });
-    info!("  ABR: {}", if abr_enabled { "enabled" } else { "disabled" });
+    info!(
+        "  Video: {}x{} @ {}fps",
+        config.video.width, config.video.height, config.video.fps
+    );
+    info!(
+        "  Audio: {}",
+        if config.enable_audio {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    info!(
+        "  Telemetry: {}",
+        if config.enable_telemetry {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    info!(
+        "  ABR: {}",
+        if abr_enabled { "enabled" } else { "disabled" }
+    );
     info!("  Test source: {}", config.test_source);
 
     // Initialize relay endpoint
@@ -204,7 +222,11 @@ async fn run_async() -> Result<()> {
         // When ABR is on, start at the High tier bitrate
         if abr_enabled {
             video_config.bitrate = QualityTier::High.bitrate_bps();
-            info!("ABR: starting at {} tier ({} bps)", QualityTier::High, video_config.bitrate);
+            info!(
+                "ABR: starting at {} tier ({} bps)",
+                QualityTier::High,
+                video_config.bitrate
+            );
         }
         let (capture, rx) = kodama::capture::VideoCapture::start(video_config)
             .context("Failed to start video capture")?;
@@ -249,7 +271,9 @@ async fn run_async() -> Result<()> {
             #[cfg(feature = "test-source")]
             {
                 info!("Starting test audio source");
-                Some(kodama::capture::start_test_audio(kodama::capture::TestAudioConfig::default()))
+                Some(kodama::capture::start_test_audio(
+                    kodama::capture::TestAudioConfig::default(),
+                ))
             }
             #[cfg(not(feature = "test-source"))]
             {
@@ -264,7 +288,10 @@ async fn run_async() -> Result<()> {
                     Some(rx)
                 }
                 Err(e) => {
-                    warn!("Failed to start audio capture: {}. Continuing without audio.", e);
+                    warn!(
+                        "Failed to start audio capture: {}. Continuing without audio.",
+                        e
+                    );
                     None
                 }
             }
@@ -280,7 +307,6 @@ async fn run_async() -> Result<()> {
                 debug!("Audio capture task ended");
             });
         }
-
     }
 
     // Create motion detector (shares motion level with telemetry)
@@ -304,7 +330,11 @@ async fn run_async() -> Result<()> {
 
                 tokio::spawn(async move {
                     while let Some(payload) = rx.recv().await {
-                        if telemetry_tx.send(CaptureMessage::Telemetry(payload)).await.is_err() {
+                        if telemetry_tx
+                            .send(CaptureMessage::Telemetry(payload))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -312,7 +342,10 @@ async fn run_async() -> Result<()> {
                 });
             }
             Err(e) => {
-                warn!("Failed to start telemetry capture: {}. Continuing without telemetry.", e);
+                warn!(
+                    "Failed to start telemetry capture: {}. Continuing without telemetry.",
+                    e
+                );
             }
         }
     }
@@ -354,7 +387,10 @@ async fn run_async() -> Result<()> {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 if get_default_interface().is_some() {
-                    info!("Route appeared after {:.1}s", wait_start.elapsed().as_secs_f64());
+                    info!(
+                        "Route appeared after {:.1}s",
+                        wait_start.elapsed().as_secs_f64()
+                    );
                     break;
                 }
                 // Drain frames to prevent backpressure while waiting
@@ -388,7 +424,11 @@ async fn run_async() -> Result<()> {
             Ok(c) => c,
             Err(e) => {
                 let delay = reconnect_delay(attempt);
-                warn!("Connection failed: {}. Retrying in {:.0}s", e, delay.as_secs_f64());
+                warn!(
+                    "Connection failed: {}. Retrying in {:.0}s",
+                    e,
+                    delay.as_secs_f64()
+                );
                 drain_during_delay(&mut combined_rx, delay).await;
                 continue;
             }
@@ -398,7 +438,11 @@ async fn run_async() -> Result<()> {
             Ok(s) => s,
             Err(e) => {
                 let delay = reconnect_delay(attempt);
-                warn!("Failed to open stream: {}. Retrying in {:.0}s", e, delay.as_secs_f64());
+                warn!(
+                    "Failed to open stream: {}. Retrying in {:.0}s",
+                    e,
+                    delay.as_secs_f64()
+                );
                 drain_during_delay(&mut combined_rx, delay).await;
                 continue;
             }
@@ -475,20 +519,19 @@ async fn run_async() -> Result<()> {
                 CaptureMessage::Video(payload) => {
                     let is_keyframe = h264::contains_keyframe(&payload);
                     session_video += 1;
-                    if is_keyframe { session_kf += 1; }
+                    if is_keyframe {
+                        session_kf += 1;
+                    }
                     motion_detector.update(is_keyframe, payload.len());
-                    Frame::video(source_id, payload, is_keyframe)
-                        .with_timestamp(timestamp_us)
+                    Frame::video(source_id, payload, is_keyframe).with_timestamp(timestamp_us)
                 }
                 CaptureMessage::Audio(payload) => {
                     session_audio += 1;
-                    Frame::audio(source_id, payload)
-                        .with_timestamp(timestamp_us)
+                    Frame::audio(source_id, payload).with_timestamp(timestamp_us)
                 }
                 CaptureMessage::Telemetry(payload) => {
                     session_telemetry += 1;
-                    Frame::telemetry(source_id, payload)
-                        .with_timestamp(timestamp_us)
+                    Frame::telemetry(source_id, payload).with_timestamp(timestamp_us)
                 }
             };
 
@@ -556,8 +599,7 @@ async fn run_async() -> Result<()> {
                 } else {
                     info!(
                         "Stats: video={} ({} kf), audio={}, telemetry={} | {:.1} fps, {:.2} Mbps",
-                        session_video, session_kf, session_audio, session_telemetry,
-                        fps, mbps,
+                        session_video, session_kf, session_audio, session_telemetry, fps, mbps,
                     );
                 }
                 last_stats = Instant::now();
@@ -607,7 +649,7 @@ async fn drain_during_delay(rx: &mut mpsc::Receiver<CaptureMessage>, delay: Dura
             break;
         }
         match tokio::time::timeout(remaining, rx.recv()).await {
-            Ok(Some(_)) => {} // discard
+            Ok(Some(_)) => {}  // discard
             Ok(None) => break, // channel closed
             Err(_) => break,   // timeout reached
         }
@@ -621,10 +663,7 @@ async fn handle_commands(stream: CommandStream) {
             Ok(Some(CommandMessage::Request(req))) => {
                 info!(id = req.id, command = ?req.command, "Received command");
                 let result = execute_command(req.command).await;
-                let resp = CommandMessage::Response(CommandResponse {
-                    id: req.id,
-                    result,
-                });
+                let resp = CommandMessage::Response(CommandResponse { id: req.id, result });
                 if let Err(e) = stream.sender.send(&resp).await {
                     warn!(error = %e, "Failed to send command response");
                     break;
@@ -648,12 +687,10 @@ async fn handle_commands(stream: CommandStream) {
 /// Execute a command and return the result
 async fn execute_command(command: Command) -> CommandResult {
     match command {
-        Command::RequestStatus => {
-            match gather_status().await {
-                Ok(status) => CommandResult::Status(status),
-                Err(e) => CommandResult::Error(format!("Failed to gather status: {}", e)),
-            }
-        }
+        Command::RequestStatus => match gather_status().await {
+            Ok(status) => CommandResult::Status(status),
+            Err(e) => CommandResult::Error(format!("Failed to gather status: {}", e)),
+        },
         Command::Reboot => {
             info!("Reboot command received, scheduling reboot in 2 seconds");
             tokio::spawn(async {
@@ -666,30 +703,14 @@ async fn execute_command(command: Command) -> CommandResult {
             });
             CommandResult::Ok
         }
-        Command::Configure(params) => {
-            execute_configure(params).await
-        }
-        Command::Record(params) => {
-            execute_record(params).await
-        }
-        Command::UpdateFirmware(params) => {
-            execute_update_firmware(params).await
-        }
-        Command::Network(params) => {
-            execute_network(params).await
-        }
-        Command::ListRecordings => {
-            execute_list_recordings().await
-        }
-        Command::DeleteRecording(params) => {
-            execute_delete_recording(params).await
-        }
-        Command::SendRecording(params) => {
-            execute_send_recording(params).await
-        }
-        Command::Stream(params) => {
-            execute_stream(params).await
-        }
+        Command::Configure(params) => execute_configure(params).await,
+        Command::Record(params) => execute_record(params).await,
+        Command::UpdateFirmware(params) => execute_update_firmware(params).await,
+        Command::Network(params) => execute_network(params).await,
+        Command::ListRecordings => execute_list_recordings().await,
+        Command::DeleteRecording(params) => execute_delete_recording(params).await,
+        Command::SendRecording(params) => execute_send_recording(params).await,
+        Command::Stream(params) => execute_stream(params).await,
     }
 }
 
@@ -706,7 +727,10 @@ async fn execute_configure(params: ConfigureParams) -> CommandResult {
 /// Handle Record command — start/stop local recording
 async fn execute_record(params: RecordParams) -> CommandResult {
     if params.start {
-        info!("Record START requested, duration={:?}s", params.duration_secs);
+        info!(
+            "Record START requested, duration={:?}s",
+            params.duration_secs
+        );
     } else {
         info!("Record STOP requested");
     }
@@ -716,7 +740,10 @@ async fn execute_record(params: RecordParams) -> CommandResult {
 
 /// Handle UpdateFirmware command — download, verify, replace, restart
 async fn execute_update_firmware(params: UpdateFirmwareParams) -> CommandResult {
-    info!("Firmware update requested: url={}, sha256={}", params.url, params.sha256);
+    info!(
+        "Firmware update requested: url={}, sha256={}",
+        params.url, params.sha256
+    );
 
     // Skip if already running the target version
     if let Some(ref target_version) = params.version {
@@ -818,7 +845,11 @@ async fn gather_status() -> Result<CameraStatus> {
     let uptime_secs = tokio::fs::read_to_string("/proc/uptime")
         .await
         .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
+        .and_then(|s| {
+            s.split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+        })
         .map(|v| v as u64)
         .unwrap_or(0);
 
@@ -831,9 +862,19 @@ async fn gather_status() -> Result<CameraStatus> {
             let mut available = 0u64;
             for line in s.lines() {
                 if line.starts_with("MemTotal:") {
-                    total = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0) * 1024;
+                    total = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0)
+                        * 1024;
                 } else if line.starts_with("MemAvailable:") {
-                    available = line.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0) * 1024;
+                    available = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0)
+                        * 1024;
                 }
             }
             (total.saturating_sub(available), total)
@@ -853,7 +894,11 @@ async fn gather_status() -> Result<CameraStatus> {
         .ok()
         .and_then(|s| {
             let line = s.lines().next()?;
-            let parts: Vec<u64> = line.split_whitespace().skip(1).filter_map(|v| v.parse().ok()).collect();
+            let parts: Vec<u64> = line
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|v| v.parse().ok())
+                .collect();
             if parts.len() >= 4 {
                 let total: u64 = parts.iter().sum();
                 let idle = parts[3];
@@ -892,7 +937,10 @@ async fn gather_status() -> Result<CameraStatus> {
 async fn network_monitor(_endpoint: iroh::Endpoint, change_tx: watch::Sender<u64>) {
     let mut last_signaled = get_default_interface();
     let mut generation = 0u64;
-    info!("Network monitor started, default interface: {:?}", last_signaled);
+    info!(
+        "Network monitor started, default interface: {:?}",
+        last_signaled
+    );
 
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -912,7 +960,10 @@ async fn network_monitor(_endpoint: iroh::Endpoint, change_tx: watch::Sender<u64
 
         // A real interface appeared that differs from last_signaled.
         // Quick 1s debounce to avoid acting on transient flaps.
-        warn!("Default route change: {:?} → {:?}, debouncing 1s...", last_signaled, current);
+        warn!(
+            "Default route change: {:?} → {:?}, debouncing 1s...",
+            last_signaled, current
+        );
         tokio::time::sleep(Duration::from_secs(1)).await;
         let settled = get_default_interface();
 

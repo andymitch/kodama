@@ -16,13 +16,12 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio_tungstenite::tungstenite;
 
-use kodama::{
-    Channel, Frame, FrameFlags, SourceId, MAX_FRAME_PAYLOAD_SIZE, ALPN,
-    Command, CommandMessage, CommandResponse, CommandResult,
-    ClientCommandMessage, TargetedCommandRequest,
-};
 use kodama::server::Router;
 use kodama::transport::{Relay, RelayConnection};
+use kodama::{
+    Channel, ClientCommandMessage, Command, CommandMessage, CommandResponse, CommandResult, Frame,
+    FrameFlags, SourceId, TargetedCommandRequest, ALPN, MAX_FRAME_PAYLOAD_SIZE,
+};
 
 // ── WebSocket message type prefixes (mirror ws.rs constants) ─────────
 
@@ -45,7 +44,11 @@ fn video_frame(payload_len: usize, keyframe: bool) -> Frame {
     Frame {
         source: test_source(),
         channel: Channel::Video,
-        flags: if keyframe { FrameFlags::keyframe() } else { FrameFlags::default() },
+        flags: if keyframe {
+            FrameFlags::keyframe()
+        } else {
+            FrameFlags::default()
+        },
         timestamp_us: 0,
         payload: Bytes::from(vec![0xAB; payload_len]),
     }
@@ -208,11 +211,7 @@ async fn start_test_server(handle: kodama::server::RouterHandle) -> SocketAddr {
 }
 
 /// Connect a camera via Iroh and send frames. Returns when all frames are sent.
-async fn connect_camera_and_send(
-    server_relay: &Arc<Relay>,
-    router: &Router,
-    frames: Vec<Frame>,
-) {
+async fn connect_camera_and_send(server_relay: &Arc<Relay>, router: &Router, frames: Vec<Frame>) {
     let server_addr = server_relay.endpoint().endpoint().addr();
     let camera_relay = Relay::new(None).await.unwrap();
 
@@ -252,8 +251,7 @@ async fn connect_camera_and_send(
 /// Connect a WebSocket client, return the stream.
 async fn connect_ws(
     addr: SocketAddr,
-) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
-{
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let url = format!("ws://{}/ws", addr);
     let (stream, _response) = tokio_tungstenite::connect_async(&url)
         .await
@@ -392,7 +390,10 @@ async fn oversized_frame_rejected_on_wire() {
     bad_buf.extend_from_slice(&vec![0u8; bad_len as usize]);
     let mut cursor = std::io::Cursor::new(bad_buf);
     let read_result = kodama::transport::mux::frame::read_frame(&mut cursor).await;
-    assert!(read_result.is_err(), "read_frame should reject oversized length");
+    assert!(
+        read_result.is_err(),
+        "read_frame should reject oversized length"
+    );
 }
 
 /// Rate limiter drops excess frames without crashing.
@@ -462,8 +463,14 @@ async fn rate_limiter_drops_excess_frames() {
     let received = client_task.await.unwrap();
     let stats = handle.stats().await;
 
-    assert!(stats.frames_broadcast > 0, "At least some frames should get through");
-    assert!(stats.frames_broadcast <= 200, "Should not broadcast more than sent");
+    assert!(
+        stats.frames_broadcast > 0,
+        "At least some frames should get through"
+    );
+    assert!(
+        stats.frames_broadcast <= 200,
+        "Should not broadcast more than sent"
+    );
     let _ = received;
 
     server_task.abort();
@@ -542,7 +549,11 @@ async fn command_routing_client_to_camera() {
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     let cameras = router.cameras_with_commands().await;
-    assert_eq!(cameras.len(), 1, "Camera command channel should be registered");
+    assert_eq!(
+        cameras.len(),
+        1,
+        "Camera command channel should be registered"
+    );
     assert_eq!(cameras[0], camera_pub_key);
 
     let router_clone = router.clone();
@@ -554,7 +565,9 @@ async fn command_routing_client_to_camera() {
         let remote = relay_conn.remote_public_key();
 
         let cmd_stream = relay_conn.accept_client_command_stream().await.unwrap();
-        router_clone.handle_client_commands(remote, cmd_stream).await;
+        router_clone
+            .handle_client_commands(remote, cmd_stream)
+            .await;
     });
 
     let camera_key_str = camera_pub_key.to_string();
@@ -720,10 +733,16 @@ async fn ws_receives_camera_list() {
     assert!(!messages.is_empty(), "Should receive at least one message");
 
     let first = &messages[0];
-    assert_eq!(first[0], MSG_CAMERA_LIST, "First message should be camera list");
+    assert_eq!(
+        first[0], MSG_CAMERA_LIST,
+        "First message should be camera list"
+    );
 
     let json: serde_json::Value = serde_json::from_slice(&first[1..]).unwrap();
-    assert!(json.as_array().unwrap().is_empty(), "Camera list should be empty initially");
+    assert!(
+        json.as_array().unwrap().is_empty(),
+        "Camera list should be empty initially"
+    );
 
     ws.close(None).await.ok();
 }
@@ -755,7 +774,10 @@ async fn ws_receives_telemetry() {
         !telemetry_msgs.is_empty(),
         "Should receive at least one telemetry message, got {} messages total: {:?}",
         messages.len(),
-        messages.iter().map(|m| m.first().copied()).collect::<Vec<_>>()
+        messages
+            .iter()
+            .map(|m| m.first().copied())
+            .collect::<Vec<_>>()
     );
 
     let tel = telemetry_msgs[0];
@@ -763,7 +785,10 @@ async fn ws_receives_telemetry() {
     assert_eq!(tel[0], MSG_TELEMETRY);
 
     let src_bytes: [u8; 8] = tel[1..9].try_into().unwrap();
-    assert!(src_bytes.iter().any(|&b| b != 0), "Source ID should be non-zero");
+    assert!(
+        src_bytes.iter().any(|&b| b != 0),
+        "Source ID should be non-zero"
+    );
 
     let json: serde_json::Value = serde_json::from_slice(&tel[9..]).unwrap();
     assert_eq!(json["cpu_usage"], 42.5);
@@ -804,13 +829,23 @@ async fn ws_receives_audio() {
     assert!(
         !audio_level_msgs.is_empty(),
         "Should receive audio level message, got types: {:?}",
-        messages.iter().map(|m| m.first().copied()).collect::<Vec<_>>()
+        messages
+            .iter()
+            .map(|m| m.first().copied())
+            .collect::<Vec<_>>()
     );
 
-    assert!(!audio_data_msgs.is_empty(), "Should receive audio data message");
+    assert!(
+        !audio_data_msgs.is_empty(),
+        "Should receive audio data message"
+    );
 
     let level_msg = audio_level_msgs[0];
-    assert_eq!(level_msg.len(), 1 + 8 + 4, "Audio level message should be 13 bytes");
+    assert_eq!(
+        level_msg.len(),
+        1 + 8 + 4,
+        "Audio level message should be 13 bytes"
+    );
     let level_bytes: [u8; 4] = level_msg[9..13].try_into().unwrap();
     let level_db = f32::from_le_bytes(level_bytes);
     assert_eq!(level_db, -60.0, "Silence should produce -60 dB");
@@ -844,7 +879,10 @@ async fn ws_receives_server_stats() {
     assert!(
         !stats_msgs.is_empty(),
         "Should receive server stats within 7 seconds, got types: {:?}",
-        messages.iter().map(|m| m.first().copied()).collect::<Vec<_>>()
+        messages
+            .iter()
+            .map(|m| m.first().copied())
+            .collect::<Vec<_>>()
     );
 
     let stats: serde_json::Value = serde_json::from_slice(&stats_msgs[0][1..]).unwrap();
@@ -868,7 +906,9 @@ async fn ws_multi_channel_pipeline() {
     let mut ws = connect_ws(addr).await;
     let _ = collect_ws_messages(&mut ws, Duration::from_millis(500)).await;
 
-    let tone: Vec<i16> = (0..480).map(|i| ((i as f32 * 0.1).sin() * 10000.0) as i16).collect();
+    let tone: Vec<i16> = (0..480)
+        .map(|i| ((i as f32 * 0.1).sin() * 10000.0) as i16)
+        .collect();
     let frames = vec![
         video_frame(1000, true),
         video_frame(500, false),
@@ -887,7 +927,9 @@ async fn ws_multi_channel_pipeline() {
     let mut got_audio_data = false;
 
     for msg in &messages {
-        if msg.is_empty() { continue; }
+        if msg.is_empty() {
+            continue;
+        }
         match msg[0] {
             MSG_CAMERA_LIST => got_camera_list = true,
             MSG_VIDEO_INIT | MSG_VIDEO_SEGMENT => {} // Only if FFmpeg is available
@@ -904,9 +946,16 @@ async fn ws_multi_channel_pipeline() {
     assert!(got_audio_level, "Should receive audio level");
     assert!(got_audio_data, "Should receive audio data");
 
-    let level_msg = messages.iter().find(|m| !m.is_empty() && m[0] == MSG_AUDIO_LEVEL).unwrap();
+    let level_msg = messages
+        .iter()
+        .find(|m| !m.is_empty() && m[0] == MSG_AUDIO_LEVEL)
+        .unwrap();
     let level_db = f32::from_le_bytes(level_msg[9..13].try_into().unwrap());
-    assert!(level_db > -60.0, "Tone should produce level above -60 dB, got {}", level_db);
+    assert!(
+        level_db > -60.0,
+        "Tone should produce level above -60 dB, got {}",
+        level_db
+    );
 
     ws.close(None).await.ok();
 }

@@ -256,8 +256,8 @@ impl BackpressureSender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::{Channel, FrameFlags, SourceId};
+    use bytes::Bytes;
 
     fn make_frame(keyframe: bool) -> Frame {
         Frame {
@@ -349,7 +349,7 @@ mod tests {
         let mut buffer = FrameBuffer::new(4);
         buffer.push(make_frame(false)); // idx 0
         buffer.push(make_frame(false)); // idx 1
-        buffer.push(make_frame(true));  // idx 2 — keyframe
+        buffer.push(make_frame(true)); // idx 2 — keyframe
 
         // Pop twice, keyframe index should track
         buffer.pop(); // removes idx 0, keyframe now at idx 1
@@ -392,8 +392,8 @@ mod tests {
     #[test]
     fn drop_rate_accurate() {
         let mut buffer = FrameBuffer::new(1);
-        buffer.push(make_frame(true));  // kept
-        buffer.push(make_frame(true));  // evicts oldest keyframe
+        buffer.push(make_frame(true)); // kept
+        buffer.push(make_frame(true)); // evicts oldest keyframe
         buffer.push(make_frame(false)); // dropped (buffer full of keyframes... actually just 1 KF)
 
         // 3 received, some dropped

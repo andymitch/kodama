@@ -21,9 +21,9 @@ use tokio::sync::broadcast;
 use tokio::time::{interval, Duration};
 use tracing::{debug, warn};
 
-use crate::{Channel, Frame, SourceId};
-use crate::server::{PeerRole, RouterHandle};
 use super::fmp4::{MuxedVideo, VideoMuxer};
+use crate::server::{PeerRole, RouterHandle};
+use crate::{Channel, Frame, SourceId};
 
 // ── Wire types for decoding camera's MessagePack telemetry ────────────
 
@@ -96,12 +96,24 @@ struct GpsState {
 
 impl TelemetryState {
     fn merge(&mut self, wire: WireTelemetry) {
-        if let Some(v) = wire.cpu_usage { self.cpu_usage = v; }
-        if let Some(v) = wire.cpu_temp { self.cpu_temp = Some(v); }
-        if let Some(v) = wire.memory_usage { self.memory_usage = v; }
-        if let Some(v) = wire.disk_usage { self.disk_usage = v; }
-        if let Some(v) = wire.uptime_secs { self.uptime_secs = v; }
-        if let Some(v) = wire.load_average { self.load_average = v; }
+        if let Some(v) = wire.cpu_usage {
+            self.cpu_usage = v;
+        }
+        if let Some(v) = wire.cpu_temp {
+            self.cpu_temp = Some(v);
+        }
+        if let Some(v) = wire.memory_usage {
+            self.memory_usage = v;
+        }
+        if let Some(v) = wire.disk_usage {
+            self.disk_usage = v;
+        }
+        if let Some(v) = wire.uptime_secs {
+            self.uptime_secs = v;
+        }
+        if let Some(v) = wire.load_average {
+            self.load_average = v;
+        }
         if let Some(ref g) = wire.gps {
             self.gps = Some(GpsState {
                 latitude: g.latitude,
@@ -112,8 +124,12 @@ impl TelemetryState {
                 fix_mode: g.fix_mode,
             });
         }
-        if let Some(v) = wire.motion_level { self.motion_level = Some(v); }
-        if wire.full { self.ready = true; }
+        if let Some(v) = wire.motion_level {
+            self.motion_level = Some(v);
+        }
+        if wire.full {
+            self.ready = true;
+        }
         // Also mark ready on first update (camera sends full heartbeat first)
         if !self.ready && wire.cpu_usage.is_some() && wire.memory_usage.is_some() {
             self.ready = true;
@@ -391,7 +407,13 @@ fn encode_camera_list_from_sources(cameras: &[SourceId]) -> Result<Vec<u8>, serd
     encode_camera_list(cameras)
 }
 
-fn encode_video_init(src: SourceId, codec: &str, width: u32, height: u32, init_segment: &[u8]) -> Vec<u8> {
+fn encode_video_init(
+    src: SourceId,
+    codec: &str,
+    width: u32,
+    height: u32,
+    init_segment: &[u8],
+) -> Vec<u8> {
     let codec_bytes = codec.as_bytes();
     let codec_len = codec_bytes.len().min(255) as u8;
     let mut buf = Vec::with_capacity(1 + 8 + 1 + codec_len as usize + 4 + init_segment.len());
@@ -439,7 +461,11 @@ fn encode_audio_data(src: SourceId, sample_rate: u32, channels: u8, pcm_data: &[
     buf
 }
 
-fn encode_peer_event(key: iroh::PublicKey, role: PeerRole, event_type: &str) -> Result<Vec<u8>, serde_json::Error> {
+fn encode_peer_event(
+    key: iroh::PublicKey,
+    role: PeerRole,
+    event_type: &str,
+) -> Result<Vec<u8>, serde_json::Error> {
     let mut obj = serde_json::json!({
         "type": event_type,
         "key": key.to_string(),
@@ -459,7 +485,10 @@ fn encode_peer_event(key: iroh::PublicKey, role: PeerRole, event_type: &str) -> 
     Ok(buf)
 }
 
-fn encode_server_stats(stats: &crate::server::RouterStats, uptime_secs: u64) -> Result<Vec<u8>, serde_json::Error> {
+fn encode_server_stats(
+    stats: &crate::server::RouterStats,
+    uptime_secs: u64,
+) -> Result<Vec<u8>, serde_json::Error> {
     let obj = serde_json::json!({
         "cameras": stats.cameras_connected,
         "clients": stats.clients_connected,

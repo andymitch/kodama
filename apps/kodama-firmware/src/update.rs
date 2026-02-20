@@ -32,10 +32,12 @@ pub struct UpdateState {
 
 impl UpdateState {
     pub fn new(url: String, sha256: String) -> Result<Self> {
-        let binary_path = std::env::current_exe()
-            .context("Failed to determine current executable path")?;
+        let binary_path =
+            std::env::current_exe().context("Failed to determine current executable path")?;
 
-        let dir = binary_path.parent().context("Binary has no parent directory")?;
+        let dir = binary_path
+            .parent()
+            .context("Binary has no parent directory")?;
         let staging_path = dir.join("kodama-firmware.new");
         let backup_path = dir.join("kodama-firmware.prev");
 
@@ -84,7 +86,10 @@ impl UpdateState {
             bail!("Failed to install new binary: {}", e);
         }
 
-        info!("OTA update installed successfully. Restarting with exit code {}.", UPDATE_EXIT_CODE);
+        info!(
+            "OTA update installed successfully. Restarting with exit code {}.",
+            UPDATE_EXIT_CODE
+        );
 
         // Step 5: Exit — systemd restarts us with the new binary
         std::process::exit(UPDATE_EXIT_CODE);
@@ -137,10 +142,7 @@ impl UpdateState {
                 // Clean up
                 drop(file);
                 let _ = tokio::fs::remove_file(&self.staging_path).await;
-                bail!(
-                    "Download exceeded max size ({} bytes)",
-                    MAX_DOWNLOAD_SIZE
-                );
+                bail!("Download exceeded max size ({} bytes)", MAX_DOWNLOAD_SIZE);
             }
 
             hasher.update(&chunk);
@@ -162,7 +164,9 @@ impl UpdateState {
         }
 
         file.flush().await?;
-        file.sync_all().await.context("Failed to fsync staging file")?;
+        file.sync_all()
+            .await
+            .context("Failed to fsync staging file")?;
         drop(file);
 
         let elapsed = start.elapsed();

@@ -10,16 +10,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  fmt:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
+    - name: Check formatting
+      run: cargo fmt -- --check
 
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
     - name: Install system dependencies
       run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-
     - name: Pin crypto dependencies
       run: |
         cargo update -p sha2 --precise 0.11.0-rc.4 || \
@@ -28,9 +31,24 @@ jobs:
         cargo update -p digest --precise 0.11.0-rc.9 || \
           cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || \
           echo "digest pinning skipped"
+    - name: Clippy
+      run: cargo clippy --workspace --all-features -- -D warnings
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+    - name: Pin crypto dependencies
+      run: |
+        cargo update -p sha2 --precise 0.11.0-rc.4 || \
+          cargo update -p sha2@0.11.0-rc.4 --precise 0.11.0-rc.4 || \
+          echo "sha2 pinning skipped"
+        cargo update -p digest --precise 0.11.0-rc.9 || \
+          cargo update -p digest@0.11.0-rc.9 --precise 0.11.0-rc.9 || \
+          echo "digest pinning skipped"
     - name: Build
-      run: cargo build --verbose --workspace
-
+      run: cargo build --verbose --workspace --all-features
     - name: Run tests
-      run: cargo test --verbose --workspace
+      run: cargo test --verbose --workspace --all-features

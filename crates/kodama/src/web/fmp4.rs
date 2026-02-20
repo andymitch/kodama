@@ -39,8 +39,8 @@ pub struct Fmp4Muxer {
     pending_init: Vec<u8>,
 }
 
-impl Fmp4Muxer {
-    pub fn new() -> Self {
+impl Default for Fmp4Muxer {
+    fn default() -> Self {
         Self {
             width: 1280,
             height: 720,
@@ -52,24 +52,41 @@ impl Fmp4Muxer {
             pending_init: Vec::new(),
         }
     }
+}
+
+impl Fmp4Muxer {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn start_ffmpeg(&mut self) -> Result<()> {
         let mut child = Command::new("ffmpeg")
             .args([
-                "-f", "h264",
-                "-probesize", "32",
-                "-analyzeduration", "0",
-                "-fflags", "+genpts",
-                "-i", "pipe:0",
-                "-c:v", "copy",
-                "-f", "mp4",
-                "-avoid_negative_ts", "make_zero",
+                "-f",
+                "h264",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
+                "-fflags",
+                "+genpts",
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "copy",
+                "-f",
+                "mp4",
+                "-avoid_negative_ts",
+                "make_zero",
                 "-start_at_zero",
                 "-movflags",
                 "frag_keyframe+empty_moov+default_base_moof+frag_every_frame+dash",
-                "-fflags", "+flush_packets+nobuffer",
-                "-flush_packets", "1",
-                "-loglevel", "error",
+                "-fflags",
+                "+flush_packets+nobuffer",
+                "-flush_packets",
+                "1",
+                "-loglevel",
+                "error",
                 "pipe:1",
             ])
             .stdin(Stdio::piped())
@@ -123,7 +140,10 @@ impl Fmp4Muxer {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if stdout_tx.send(Bytes::copy_from_slice(&buffer[..n])).is_err() {
+                        if stdout_tx
+                            .send(Bytes::copy_from_slice(&buffer[..n]))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -154,7 +174,12 @@ impl Fmp4Muxer {
         tracing::info!("FFmpeg muxer reset");
     }
 
-    pub fn mux_frame(&mut self, payload: &[u8], is_keyframe: bool, _timestamp_us: u64) -> MuxResult {
+    pub fn mux_frame(
+        &mut self,
+        payload: &[u8],
+        is_keyframe: bool,
+        _timestamp_us: u64,
+    ) -> MuxResult {
         let mut result = MuxResult {
             init_segment: None,
             codec: Some("avc1.640028".to_string()),
@@ -265,7 +290,8 @@ impl Drop for Fmp4Muxer {
 fn find_box_end(data: &[u8], box_type: &[u8; 4]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         if size < 8 || pos + size > data.len() {
             return None;
         }
@@ -347,16 +373,19 @@ impl VideoMuxer {
                     }
 
                     let src = frame.source;
-                    let muxer = muxers.entry(src).or_insert_with(Fmp4Muxer::new);
+                    let muxer = muxers.entry(src).or_default();
                     let result = muxer.mux_frame(
                         &frame.payload,
                         frame.flags.is_keyframe(),
                         frame.timestamp_us,
                     );
 
-                    if let (Some(init_data), Some(codec), Some(w), Some(h)) =
-                        (result.init_segment, &result.codec, result.width, result.height)
-                    {
+                    if let (Some(init_data), Some(codec), Some(w), Some(h)) = (
+                        result.init_segment,
+                        &result.codec,
+                        result.width,
+                        result.height,
+                    ) {
                         let cached = CachedInit {
                             codec: codec.clone(),
                             width: w,

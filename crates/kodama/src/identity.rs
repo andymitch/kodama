@@ -36,9 +36,9 @@ impl KeyPair {
     /// Load a keypair from a file
     pub fn load(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
-        let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-            anyhow::anyhow!("Invalid key file length, expected 32 bytes")
-        })?;
+        let bytes: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid key file length, expected 32 bytes"))?;
         Ok(Self {
             secret: SecretKey::from_bytes(&bytes),
         })

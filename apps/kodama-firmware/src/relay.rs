@@ -9,8 +9,8 @@ use tokio::sync::broadcast;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
 
-use kodama::Frame;
 use kodama::transport::{FrameReceiver, Relay};
+use kodama::Frame;
 
 struct RelayStats {
     cameras: AtomicUsize,
@@ -64,35 +64,34 @@ async fn run_async() -> Result<()> {
 
     // Spawn upstream forwarder if configured
     if let Some(ref upstream) = upstream_key {
-        let upstream_key: iroh::PublicKey = upstream.parse()
+        let upstream_key: iroh::PublicKey = upstream
+            .parse()
             .map_err(|_| anyhow::anyhow!("Invalid KODAMA_UPSTREAM_KEY"))?;
         let upstream_relay = Relay::new(None).await?;
         let mut upstream_rx = tx.subscribe();
         tokio::spawn(async move {
             info!("Connecting to upstream server: {}", upstream_key);
             match upstream_relay.connect(upstream_key).await {
-                Ok(conn) => {
-                    match conn.open_frame_stream().await {
-                        Ok(sender) => {
-                            info!("Upstream connection established");
-                            loop {
-                                match upstream_rx.recv().await {
-                                    Ok(frame) => {
-                                        if let Err(e) = sender.send(&frame).await {
-                                            warn!("Upstream send error: {}", e);
-                                            break;
-                                        }
+                Ok(conn) => match conn.open_frame_stream().await {
+                    Ok(sender) => {
+                        info!("Upstream connection established");
+                        loop {
+                            match upstream_rx.recv().await {
+                                Ok(frame) => {
+                                    if let Err(e) = sender.send(&frame).await {
+                                        warn!("Upstream send error: {}", e);
+                                        break;
                                     }
-                                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                                        warn!("Upstream lagged, missed {} frames", n);
-                                    }
-                                    Err(broadcast::error::RecvError::Closed) => break,
                                 }
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!("Upstream lagged, missed {} frames", n);
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
                             }
                         }
-                        Err(e) => error!("Failed to open upstream stream: {}", e),
                     }
-                }
+                    Err(e) => error!("Failed to open upstream stream: {}", e),
+                },
                 Err(e) => error!("Failed to connect to upstream: {}", e),
             }
         });

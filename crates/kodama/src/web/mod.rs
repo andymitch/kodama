@@ -92,12 +92,14 @@ pub async fn start(
         if path.exists() {
             info!("Serving UI from {:?}", path);
             app = app.fallback_service(
-                ServeDir::new(path).fallback(
-                    ServeDir::new(path).append_index_html_on_directories(true),
-                ),
+                ServeDir::new(path)
+                    .fallback(ServeDir::new(path).append_index_html_on_directories(true)),
             );
         } else {
-            tracing::warn!("UI path {:?} does not exist, skipping static file serving", path);
+            tracing::warn!(
+                "UI path {:?} does not exist, skipping static file serving",
+                path
+            );
         }
     }
 
@@ -115,10 +117,7 @@ pub async fn start(
 }
 
 /// WebSocket upgrade handler
-async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<WebState>>,
-) -> impl IntoResponse {
+async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<WebState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| {
         ws::handle_ws(
             socket,
@@ -130,9 +129,7 @@ async fn ws_upgrade(
 }
 
 /// GET /api/cameras — list connected cameras
-async fn api_cameras(
-    State(state): State<Arc<WebState>>,
-) -> Json<serde_json::Value> {
+async fn api_cameras(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
     use crate::server::PeerRole;
 
     let peers = state.handle.peers().await;
@@ -154,9 +151,7 @@ async fn api_cameras(
 }
 
 /// GET /api/peers — list all connected peers
-async fn api_peers(
-    State(state): State<Arc<WebState>>,
-) -> Json<serde_json::Value> {
+async fn api_peers(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
     use crate::server::PeerRole;
 
     let peers = state.handle.peers().await;
@@ -183,9 +178,7 @@ async fn api_peers(
 }
 
 /// GET /api/status — server status
-async fn api_status(
-    State(state): State<Arc<WebState>>,
-) -> Json<serde_json::Value> {
+async fn api_status(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
     let stats = state.handle.stats().await;
     let uptime = state.start_time.elapsed().as_secs();
 
@@ -212,9 +205,7 @@ async fn api_status(
 }
 
 /// GET /api/storage — storage statistics
-async fn api_storage(
-    State(state): State<Arc<WebState>>,
-) -> Json<serde_json::Value> {
+async fn api_storage(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
     if let Some(ref s) = state.storage {
         let stats = s.stats().await;
         Json(serde_json::json!({

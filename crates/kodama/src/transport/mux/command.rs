@@ -7,7 +7,7 @@
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::{CommandMessage, ClientCommandMessage, MAX_COMMAND_SIZE};
+use crate::{ClientCommandMessage, CommandMessage, MAX_COMMAND_SIZE};
 
 /// Write a command message to an async writer (length-prefixed MessagePack)
 pub async fn write_command<W: AsyncWrite + Unpin>(
@@ -17,10 +17,16 @@ pub async fn write_command<W: AsyncWrite + Unpin>(
     let bytes = rmp_serde::to_vec(msg)?;
 
     if bytes.len() > MAX_COMMAND_SIZE {
-        anyhow::bail!("Command message too large: {} > {}", bytes.len(), MAX_COMMAND_SIZE);
+        anyhow::bail!(
+            "Command message too large: {} > {}",
+            bytes.len(),
+            MAX_COMMAND_SIZE
+        );
     }
 
-    writer.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
+    writer
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .await?;
     writer.write_all(&bytes).await?;
 
     Ok(())
@@ -50,10 +56,16 @@ pub async fn write_client_command<W: AsyncWrite + Unpin>(
     let bytes = rmp_serde::to_vec(msg)?;
 
     if bytes.len() > MAX_COMMAND_SIZE {
-        anyhow::bail!("Client command message too large: {} > {}", bytes.len(), MAX_COMMAND_SIZE);
+        anyhow::bail!(
+            "Client command message too large: {} > {}",
+            bytes.len(),
+            MAX_COMMAND_SIZE
+        );
     }
 
-    writer.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
+    writer
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .await?;
     writer.write_all(&bytes).await?;
 
     Ok(())
@@ -68,7 +80,11 @@ pub async fn read_client_command<R: AsyncRead + Unpin>(
     let len = u32::from_be_bytes(len_bytes) as usize;
 
     if len > MAX_COMMAND_SIZE {
-        anyhow::bail!("Client command message too large: {} > {}", len, MAX_COMMAND_SIZE);
+        anyhow::bail!(
+            "Client command message too large: {} > {}",
+            len,
+            MAX_COMMAND_SIZE
+        );
     }
 
     let mut buf = vec![0u8; len];
@@ -80,7 +96,7 @@ pub async fn read_client_command<R: AsyncRead + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CommandRequest, CommandResponse, Command, CommandResult};
+    use crate::{Command, CommandRequest, CommandResponse, CommandResult};
 
     #[tokio::test]
     async fn test_command_write_read_roundtrip() {

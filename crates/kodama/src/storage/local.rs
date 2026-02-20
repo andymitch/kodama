@@ -12,9 +12,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{Frame, SourceId};
-use crate::transport::mux::frame::{frame_from_bytes, frame_to_bytes};
 use super::StorageBackend;
+use crate::transport::mux::frame::{frame_from_bytes, frame_to_bytes};
+use crate::{Frame, SourceId};
 
 /// Configuration for local storage
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ impl Default for LocalStorageConfig {
         Self {
             root_path: PathBuf::from("/var/lib/kodama/recordings"),
             max_size_bytes: 10 * 1024 * 1024 * 1024, // 10 GB
-            segment_duration_us: 60 * 1_000_000, // 1-minute segments
+            segment_duration_us: 60 * 1_000_000,     // 1-minute segments
         }
     }
 }
@@ -92,8 +92,9 @@ impl LocalStorage {
     /// Create a new local storage backend
     pub fn new(config: LocalStorageConfig) -> Result<Self> {
         // Create root directory if needed
-        fs::create_dir_all(&config.root_path)
-            .with_context(|| format!("Failed to create storage directory: {:?}", config.root_path))?;
+        fs::create_dir_all(&config.root_path).with_context(|| {
+            format!("Failed to create storage directory: {:?}", config.root_path)
+        })?;
 
         // Scan existing files to rebuild index
         let index = Self::rebuild_index_sync(&config)?;
@@ -123,7 +124,11 @@ impl LocalStorage {
 
                         if let Ok(segment_entries) = fs::read_dir(entry.path()) {
                             for seg_entry in segment_entries.flatten() {
-                                if seg_entry.path().extension().is_some_and(|ext| ext == "segment") {
+                                if seg_entry
+                                    .path()
+                                    .extension()
+                                    .is_some_and(|ext| ext == "segment")
+                                {
                                     if let Ok(seg_index) = read_segment_index(&seg_entry.path()) {
                                         index.total_bytes += seg_index.size_bytes;
                                         segments.push(seg_index);
@@ -140,14 +145,19 @@ impl LocalStorage {
             }
         }
 
-        info!("Found {} sources, {} total bytes", index.segments.len(), index.total_bytes);
+        info!(
+            "Found {} sources, {} total bytes",
+            index.segments.len(),
+            index.total_bytes
+        );
 
         Ok(index)
     }
 
     /// Get the segment path for a given source and timestamp
     fn segment_path(&self, source: SourceId, timestamp_us: u64) -> PathBuf {
-        let segment_start = (timestamp_us / self.config.segment_duration_us) * self.config.segment_duration_us;
+        let segment_start =
+            (timestamp_us / self.config.segment_duration_us) * self.config.segment_duration_us;
         let source_dir = self.config.root_path.join(format!("{}", source));
         source_dir.join(format!("{}.segment", segment_start))
     }
@@ -155,13 +165,15 @@ impl LocalStorage {
     /// Get or create a segment writer for the given source and timestamp
     async fn get_or_create_writer(&self, source: SourceId, timestamp_us: u64) -> Result<()> {
         let segment_path = self.segment_path(source, timestamp_us);
-        let segment_start = (timestamp_us / self.config.segment_duration_us) * self.config.segment_duration_us;
+        let segment_start =
+            (timestamp_us / self.config.segment_duration_us) * self.config.segment_duration_us;
 
         let mut writers = self.writers.write().await;
 
         // Check if we need a new segment
         if let Some(writer) = writers.get(&source) {
-            let writer_segment = (writer.start_time_us / self.config.segment_duration_us) * self.config.segment_duration_us;
+            let writer_segment = (writer.start_time_us / self.config.segment_duration_us)
+                * self.config.segment_duration_us;
             if writer_segment == segment_start {
                 return Ok(());
             }
@@ -223,10 +235,7 @@ impl LocalStorage {
         };
 
         index.total_bytes += seg_index.size_bytes;
-        index.segments
-            .entry(source)
-            .or_default()
-            .push(seg_index);
+        index.segments.entry(source).or_default().push(seg_index);
 
         Ok(())
     }
@@ -252,10 +261,12 @@ impl LocalStorage {
 #[async_trait::async_trait]
 impl StorageBackend for LocalStorage {
     async fn store_frame(&self, frame: &Frame) -> Result<()> {
-        self.get_or_create_writer(frame.source, frame.timestamp_us).await?;
+        self.get_or_create_writer(frame.source, frame.timestamp_us)
+            .await?;
 
         let mut writers = self.writers.write().await;
-        let writer = writers.get_mut(&frame.source)
+        let writer = writers
+            .get_mut(&frame.source)
             .context("Writer not found after creation")?;
 
         // Serialize frame data in async context
@@ -379,7 +390,8 @@ impl StorageBackend for LocalStorage {
                     let available = stat.f_bavail as u64 * stat.f_frsize as u64;
                     Ok(Some(available))
                 }
-            }).await??;
+            })
+            .await??;
             Ok(result)
         }
         #[cfg(not(unix))]
@@ -430,8 +442,8 @@ fn parse_source_id_from_dir(path: &Path) -> Option<SourceId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use crate::{Channel, FrameFlags};
+    use bytes::Bytes;
     use tempfile::tempdir;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -451,7 +463,11 @@ mod tests {
             let frame = Frame {
                 source,
                 channel: Channel::Video,
-                flags: if i == 0 { FrameFlags::keyframe() } else { FrameFlags::default() },
+                flags: if i == 0 {
+                    FrameFlags::keyframe()
+                } else {
+                    FrameFlags::default()
+                },
                 timestamp_us: i * 100_000, // 100ms apart
                 payload: Bytes::from(format!("frame {}", i)),
             };
@@ -478,7 +494,9 @@ mod tests {
     #[test]
     fn test_parse_source_id_rejects_wrong_length() {
         assert!(parse_source_id_from_dir(&PathBuf::from("/storage/0102")).is_none());
-        assert!(parse_source_id_from_dir(&PathBuf::from("/storage/01020304050607080910")).is_none());
+        assert!(
+            parse_source_id_from_dir(&PathBuf::from("/storage/01020304050607080910")).is_none()
+        );
     }
 
     #[test]
@@ -513,8 +531,14 @@ mod tests {
         let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
 
         // Store frames in two different segments (1s apart)
-        storage.store_frame(&make_frame(source, 100_000, "old")).await.unwrap();
-        storage.store_frame(&make_frame(source, 1_500_000, "new")).await.unwrap();
+        storage
+            .store_frame(&make_frame(source, 100_000, "old"))
+            .await
+            .unwrap();
+        storage
+            .store_frame(&make_frame(source, 1_500_000, "new"))
+            .await
+            .unwrap();
         storage.flush().await.unwrap();
 
         let usage_before = storage.usage_bytes().await.unwrap();
@@ -539,7 +563,10 @@ mod tests {
         let storage = LocalStorage::new(test_config(dir.path())).unwrap();
         let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
 
-        storage.store_frame(&make_frame(source, 1_000_000, "recent")).await.unwrap();
+        storage
+            .store_frame(&make_frame(source, 1_000_000, "recent"))
+            .await
+            .unwrap();
         storage.flush().await.unwrap();
 
         // Cleanup before the earliest frame — nothing to delete
@@ -560,8 +587,14 @@ mod tests {
         // Phase 1: write data and drop storage
         {
             let storage = LocalStorage::new(test_config(dir.path())).unwrap();
-            storage.store_frame(&make_frame(source, 100_000, "frame1")).await.unwrap();
-            storage.store_frame(&make_frame(source, 200_000, "frame2")).await.unwrap();
+            storage
+                .store_frame(&make_frame(source, 100_000, "frame1"))
+                .await
+                .unwrap();
+            storage
+                .store_frame(&make_frame(source, 200_000, "frame2"))
+                .await
+                .unwrap();
             storage.flush().await.unwrap();
         }
 
@@ -587,10 +620,22 @@ mod tests {
         let source2 = SourceId::new([2, 0, 0, 0, 0, 0, 0, 0]);
 
         // Interleave writes from two sources
-        storage.store_frame(&make_frame(source1, 100_000, "s1-f1")).await.unwrap();
-        storage.store_frame(&make_frame(source2, 100_000, "s2-f1")).await.unwrap();
-        storage.store_frame(&make_frame(source1, 200_000, "s1-f2")).await.unwrap();
-        storage.store_frame(&make_frame(source2, 200_000, "s2-f2")).await.unwrap();
+        storage
+            .store_frame(&make_frame(source1, 100_000, "s1-f1"))
+            .await
+            .unwrap();
+        storage
+            .store_frame(&make_frame(source2, 100_000, "s2-f1"))
+            .await
+            .unwrap();
+        storage
+            .store_frame(&make_frame(source1, 200_000, "s1-f2"))
+            .await
+            .unwrap();
+        storage
+            .store_frame(&make_frame(source2, 200_000, "s2-f2"))
+            .await
+            .unwrap();
         storage.flush().await.unwrap();
 
         let frames1 = storage.get_frames(source1, 0, 500_000).await.unwrap();
@@ -613,7 +658,10 @@ mod tests {
         // Write frames across 3 segments (1s each)
         for i in 0..3 {
             let timestamp = i * 1_000_000 + 500_000; // 0.5s, 1.5s, 2.5s
-            storage.store_frame(&make_frame(source, timestamp, &format!("seg{}", i))).await.unwrap();
+            storage
+                .store_frame(&make_frame(source, timestamp, &format!("seg{}", i)))
+                .await
+                .unwrap();
         }
         storage.flush().await.unwrap();
 
@@ -622,7 +670,10 @@ mod tests {
         assert_eq!(all.len(), 3);
 
         // Query partial range (only middle segment)
-        let mid = storage.get_frames(source, 1_000_000, 2_000_000).await.unwrap();
+        let mid = storage
+            .get_frames(source, 1_000_000, 2_000_000)
+            .await
+            .unwrap();
         assert_eq!(mid.len(), 1);
         assert_eq!(mid[0].timestamp_us, 1_500_000);
     }
@@ -663,7 +714,10 @@ mod tests {
         let storage = LocalStorage::new(test_config(dir.path())).unwrap();
         let source = SourceId::new([1, 2, 3, 4, 5, 6, 7, 8]);
 
-        storage.store_frame(&make_frame(source, 100_000, "data")).await.unwrap();
+        storage
+            .store_frame(&make_frame(source, 100_000, "data"))
+            .await
+            .unwrap();
         storage.flush().await.unwrap();
 
         let before = storage.usage_bytes().await.unwrap();
