@@ -166,9 +166,9 @@ pub async fn handle_ws(
     let mut known_cameras: HashSet<SourceId> = cameras.into_iter().collect();
 
     // Track known peer keys for connect/disconnect detection
-    let mut known_peers: HashSet<iroh::PublicKey> = {
+    let mut known_peers: HashMap<iroh::PublicKey, PeerRole> = {
         let peers = handle.peers().await;
-        peers.into_iter().map(|p| p.key).collect()
+        peers.into_iter().map(|p| (p.key, p.role)).collect()
     };
 
     // Periodic stats push every 5 seconds
@@ -265,7 +265,7 @@ pub async fn handle_ws(
 
                 // New peers (connected)
                 for p in &current_peers {
-                    if !known_peers.contains(&p.key) {
+                    if !known_peers.contains_key(&p.key) {
                         if let Ok(msg) = encode_peer_event(p.key, p.role, "connected") {
                             if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
                                 break;
@@ -275,17 +275,33 @@ pub async fn handle_ws(
                 }
 
                 // Removed peers (disconnected)
-                for key in &known_peers {
+                let mut camera_disconnected = false;
+                for (key, role) in &known_peers {
                     if !current_keys.contains(key) {
-                        if let Ok(msg) = encode_peer_event(*key, PeerRole::Client, "disconnected") {
+                        if let Ok(msg) = encode_peer_event(*key, *role, "disconnected") {
                             if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
                                 break;
                             }
                         }
+                        if *role == PeerRole::Camera {
+                            let source = SourceId::from_node_id_bytes(key.as_bytes());
+                            known_cameras.remove(&source);
+                            camera_disconnected = true;
+                        }
                     }
                 }
 
-                known_peers = current_keys;
+                // Send updated camera list if any camera disconnected
+                if camera_disconnected {
+                    let list: Vec<SourceId> = known_cameras.iter().copied().collect();
+                    if let Ok(msg) = encode_camera_list_from_sources(&list) {
+                        if ws_tx.send(Message::Binary(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+
+                known_peers = current_peers.iter().map(|p| (p.key, p.role)).collect();
 
                 // Push stats
                 let stats = handle.stats().await;
