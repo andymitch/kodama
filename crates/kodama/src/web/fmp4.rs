@@ -163,15 +163,38 @@ impl Fmp4Muxer {
             media_segment: None,
         };
 
+        // Check if FFmpeg has exited BEFORE feeding new data. When FFmpeg
+        // crashes (e.g. H.264 data without SPS/PPS), we must fully reset
+        // and wait for a keyframe that includes parameter sets.
+        if let Some(ref mut child) = self.ffmpeg {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    tracing::warn!("FFmpeg exited (status {}), resetting muxer", status);
+                    let _ = self.ffmpeg.take();
+                    self.stdin_tx = None;
+                    self.stdout_rx = None;
+                    self.init_sent = false;
+                    self.needs_keyframe = true;
+                    self.pending_init.clear();
+                    return result;
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("Failed to check FFmpeg status: {}", e),
+            }
+        }
+
         if self.needs_keyframe {
             if !is_keyframe {
                 return result;
             }
-            tracing::info!("FFmpeg got keyframe after reset, starting new muxer");
             self.needs_keyframe = false;
         }
 
+        // Only start FFmpeg on a keyframe to ensure SPS/PPS are present
         if self.ffmpeg.is_none() {
+            if !is_keyframe {
+                return result;
+            }
             if let Err(e) = self.start_ffmpeg() {
                 tracing::error!("Failed to start ffmpeg: {}", e);
                 return result;
@@ -180,20 +203,9 @@ impl Fmp4Muxer {
 
         if let Some(ref tx) = self.stdin_tx {
             if tx.send(payload.to_vec()).is_err() {
-                tracing::warn!("Failed to send data to ffmpeg");
-            }
-        }
-
-        // Check if FFmpeg process has exited
-        if let Some(ref mut child) = self.ffmpeg {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    tracing::warn!("FFmpeg process exited with status: {}", status);
-                    self.ffmpeg = None;
-                    self.stdin_tx = None;
-                }
-                Ok(None) => {}
-                Err(e) => tracing::warn!("Failed to check FFmpeg status: {}", e),
+                tracing::warn!("FFmpeg stdin closed, resetting muxer");
+                self.reset();
+                return result;
             }
         }
 
@@ -224,12 +236,8 @@ impl Fmp4Muxer {
                         Ok(data) => combined.extend_from_slice(&data),
                         Err(mpsc::TryRecvError::Empty) => break,
                         Err(mpsc::TryRecvError::Disconnected) => {
-                            tracing::warn!("FFmpeg stdout disconnected");
-                            self.ffmpeg = None;
-                            self.stdin_tx = None;
-                            self.stdout_rx = None;
-                            self.init_sent = false;
-                            self.needs_keyframe = true;
+                            tracing::warn!("FFmpeg stdout disconnected, resetting muxer");
+                            self.reset();
                             break;
                         }
                     }
